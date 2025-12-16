@@ -1,0 +1,132 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+a {
+  color: inherit;
+}
+
+/* AG Grid row highlights */
+.ag-theme-quartz {
+  font-size: 10px;
+  --ag-foreground-color: #e2e8f0;
+  --ag-background-color: #0f172a;
+  --ag-header-background-color: #1e293b;
+  --ag-header-foreground-color: #f1f5f9;
+  --ag-header-column-resize-handle-color: #fbbf24;
+  --ag-border-color: #1f2937;
+  --ag-row-hover-color: rgba(59, 130, 246, 0.15);
+  --ag-odd-row-background-color: #131c30;
+  --ag-even-row-background-color: #0f172a;
+  --ag-input-border-color: #334155;
+  --ag-selected-row-background-color: rgba(14, 165, 233, 0.25);
+}
+
+.ag-theme-quartz .ag-root-wrapper,
+.ag-theme-quartz .ag-root-wrapper-body,
+.ag-theme-quartz .ag-root {
+  background: #0f172a;
+}
+
+.ag-theme-quartz .ag-center-cols-viewport,
+.ag-theme-quartz .ag-center-cols-container,
+.ag-theme-quartz .ag-body-viewport {
+  background-color: #0f172a;
+}
+
+.ag-theme-quartz .row-vendido {
+  background-color: rgba(6, 78, 59, 0.6) !important; /* emerald-900/60 */
+}
+
+.ag-theme-quartz .row-prestado {
+  background-color: rgba(120, 53, 15, 0.6) !important; /* amber-900/60 */
+}
+
+.ag-theme-quartz .ag-row.ag-row-selected {
+  background-color: rgba(14, 165, 233, 0.25) !important;
+  box-shadow: inset 0 0 0 1px rgba(14, 165, 233, 0.6);
+}
+
+.ag-theme-quartz .ag-row {
+  border-bottom: 1px solid #1e293b;
+}
+
+.ag-theme-quartz .ag-header {
+  border-bottom: 1px solid #334155;
+}
+
+.ag-theme-quartz .ag-header-cell {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+}
+
+.ag-theme-quartz .ag-root-wrapper {
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(9, 13, 24, 0.95));
+}
+
+/* AG Grid select editor styling (inline) */
+.ag-theme-quartz .ag-cell-inline-editing select.ag-cell-edit-input {
+  background-color: #0f172a;
+  color: #000000;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 4px 28px 4px 8px;
+  font-size: 10px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%),
+    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 12px) 50%;
+  background-size: 8px 8px, 8px 8px;
+  background-repeat: no-repeat;
+}
+
+.ag-theme-quartz .ag-cell-inline-editing select.ag-cell-edit-input:focus {
+  outline: 1px solid #f59e0b;
+  border-color: #f59e0b;
+}
+
+/* Popup editor as bubble */
+.ag-theme-quartz .ag-popup-editor {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+  padding: 6px 8px;
+  min-width: 220px;
+}
+
+.ag-theme-quartz .ag-popup-editor select.ag-cell-edit-input {
+  background: #ffffff;
+  color: #000000;
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  padding: 5px 26px 5px 9px;
+  font-size: 10px;
+  width: 100%;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #0f172a 50%),
+    linear-gradient(135deg, #0f172a 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 12px) 50%;
+  background-size: 7px 7px, 7px 7px;
+  background-repeat: no-repeat;
+}
+
+.ag-theme-quartz .ag-popup-editor select.ag-cell-edit-input:focus {
+  outline: 1px solid #f59e0b;
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+}
