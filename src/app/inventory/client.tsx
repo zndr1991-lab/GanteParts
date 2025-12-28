@@ -3,7 +3,13 @@
 import { AgGridReact } from "ag-grid-react";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import type {
+  CellFocusedEvent,
+  CellKeyDownEvent,
+  RowSelectedEvent,
+  SelectionChangedEvent
+} from "ag-grid-community";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Item = {
   id: string;
@@ -17,48 +23,11 @@ type Item = {
   extraData?: Record<string, any> | null;
 };
 
-const StatusInternoEditor = forwardRef<any, any>((props, ref) => {
-  const [value, setValue] = useState((props.value ?? "").toString().toUpperCase());
-  const currentValueRef = useRef<string>(value);
-  const selectRef = useRef<HTMLSelectElement>(null);
-
-  useEffect(() => {
-    const next = (props.value ?? "").toString().toUpperCase();
-    setValue(next);
-    currentValueRef.current = next;
-  }, [props.value]);
-
-  useImperativeHandle(ref, () => ({
-    getValue: () => currentValueRef.current,
-    afterGuiAttached: () => {
-      selectRef.current?.focus();
-      selectRef.current?.click();
-    }
-  }));
-
-  return (
-    <select
-      ref={selectRef}
-      className="bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded px-2 py-1 outline-none"
-      value={value}
-      onChange={(e) => {
-        const next = e.target.value.toUpperCase();
-        setValue(next);
-        currentValueRef.current = next;
-        // Commit immediately after selection so the grid updates the value using the latest ref.
-        props.stopEditing?.();
-      }}
-    >
-      <option value="">-</option>
-      {estatusInternoOptions.map((opt) => (
-        <option key={opt} value={opt}>
-          {opt}
-        </option>
-      ))}
-    </select>
-  );
-});
-StatusInternoEditor.displayName = "StatusInternoEditor";
+type FocusedInfo = {
+  sku: string;
+  coche: string;
+  ano: string;
+};
 
 const brandOptions = [
   "ACURA",
@@ -187,10 +156,62 @@ const sanitizePhotos = (value: any) => {
     .slice(0, MAX_PHOTOS);
 };
 
+const toFocusedInfo = (item?: Item | null): FocusedInfo | null => {
+  if (!item) return null;
+  const extra = item.extraData ?? {};
+  const hasYear = extra.ano_desde || extra.ano_hasta;
+  const ano = hasYear ? `${extra.ano_desde ?? "-"}-${extra.ano_hasta ?? "-"}` : "-";
+  const sku = (item.skuInternal ?? "").toString().trim();
+  const cocheRaw = (extra.coche ?? "").toString().trim();
+  return {
+    sku: sku.length ? sku.toUpperCase() : "-",
+    coche: cocheRaw.length ? cocheRaw.toUpperCase() : "-",
+    ano
+  };
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    const dd = String(parsed.getDate()).padStart(2, "0");
+    const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+    const yyyy = parsed.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
+  const match = value.replace(/\./g, "/").match(/(\d{1,4})[\/](\d{1,2})[\/](\d{1,4})/);
+  if (match) {
+    const first = match[1];
+    const second = match[2];
+    const third = match[3];
+    const yearFirst = first.length === 4;
+    const day = yearFirst ? third : first;
+    const month = second;
+    const year = yearFirst ? first : third;
+    return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year.padStart(4, "0")}`;
+  }
+  return value;
+};
+
+const formatCurrencyMx = (value?: number | null) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  try {
+    return new Intl.NumberFormat("es-MX", {
+      style: "currency",
+      currency: "MXN",
+      minimumFractionDigits: 2
+    }).format(Number(value));
+  } catch {
+    return value?.toString() ?? "-";
+  }
+};
+
 export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const [items, setItems] = useState<Item[]>(initialItems);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [form, setForm] = useState({
     skuInternal: "",
     estatusInterno: "",
@@ -241,16 +262,17 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     }
   };
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const res = await fetch("/api/inventory");
     if (res.ok) {
       const data = await res.json();
       setItems(data);
       setSelectedIds([]);
+      setFocusedRowInfo(null);
     }
-  };
+  }, []);
 
-  const deleteItems = async (ids: string[], password?: string) => {
+  const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
     setMessage(null);
     try {
@@ -268,9 +290,9 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     } catch (err: any) {
       setMessage(err.message || "No se pudo borrar");
     }
-  };
+  }, [refresh]);
 
-  const requestDeleteAuthorization = async (ids: string[]) => {
+  const requestDeleteAuthorization = useCallback(async (ids: string[]) => {
     if (!ids.length) return;
     const confirmed = window.confirm(
       `Estas por borrar ${ids.length} ${ids.length === 1 ? "registro" : "registros"}. Esta accion no se puede deshacer. ¿Continuar?`
@@ -291,7 +313,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       return;
     }
     await deleteItems(ids, trimmed);
-  };
+  }, [deleteItems]);
 
   const fileToDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -301,7 +323,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       reader.readAsDataURL(file);
     });
 
-  const openPhotoModal = (itemId: string, title: string, photos: string[]) => {
+  const openPhotoModal = useCallback((itemId: string, title: string, photos: string[]) => {
     setPhotoModal({ id: itemId, title });
     setModalPhotos(photos.slice(0, MAX_PHOTOS));
     setPhotoModalError(null);
@@ -309,9 +331,9 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     if (modalPhotoInputRef.current) {
       modalPhotoInputRef.current.value = "";
     }
-  };
+  }, []);
 
-  const closePhotoModal = () => {
+  const closePhotoModal = useCallback(() => {
     setPhotoModal(null);
     setModalPhotos([]);
     setPhotoModalError(null);
@@ -319,7 +341,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     if (modalPhotoInputRef.current) {
       modalPhotoInputRef.current.value = "";
     }
-  };
+  }, []);
 
   const handleModalFileSelection = async (fileList: FileList | null) => {
     if (!photoModal || !fileList?.length) return;
@@ -522,7 +544,11 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     }
   };
 
-  const updateEstatusInterno = async (id: string, value: string) => {
+  const updateEstatusInterno = useCallback(async (
+    id: string,
+    value: string,
+    overridePrestadoVendidoA?: string | null
+  ) => {
     const normalized = value.trim().toUpperCase();
     const nextStatus =
       normalized === "VENDIDO" || normalized === "SIN SUBIR"
@@ -536,7 +562,11 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     const shouldStampDate = normalized === "PRESTADO" || normalized === "VENDIDO";
     const fechaPrestamoPago = shouldStampDate ? new Date().toISOString() : null;
     const current = items.find((it) => it.id === id);
-    const prestadoVendidoA = current?.extraData?.prestado_vendido_a ?? null;
+    const currentPrestadoVendidoA = current?.extraData?.prestado_vendido_a ?? null;
+    const hasOverride = typeof overridePrestadoVendidoA !== "undefined";
+    const prestadoVendidoA = hasOverride
+      ? overridePrestadoVendidoA ?? null
+      : currentPrestadoVendidoA;
 
     const prevItems = items.map((item) => ({
       ...item,
@@ -554,7 +584,9 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
                 ...(item.extraData ?? {}),
                 estatus_interno: normalized || undefined,
                 fecha_prestamo_pago: shouldStampDate ? fechaPrestamoPago : undefined,
-                prestado_vendido_a: item.extraData?.prestado_vendido_a
+                  prestado_vendido_a: hasOverride
+                    ? prestadoVendidoA || undefined
+                    : item.extraData?.prestado_vendido_a
               }
             }
           : item
@@ -583,9 +615,89 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     } finally {
       setUpdatingIds((prev) => prev.filter((x) => x !== id));
     }
-  };
+  }, [items]);
 
-  const updatePrestadoVendidoA = async (id: string, value: string) => {
+  const updateOrigen = useCallback(async (id: string, value: string) => {
+    const upper = value.trim().toUpperCase();
+    const prevItems = items.map((item) => ({
+      ...item,
+      extraData: item.extraData ? { ...item.extraData } : item.extraData
+    }));
+
+    setUpdatingIds((prev) => [...prev, id]);
+    setItems((curr) =>
+      curr.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              extraData: {
+                ...(item.extraData ?? {}),
+                origen: upper || undefined
+              }
+            }
+          : item
+      )
+    );
+
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, origen: upper || null })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "No se pudo actualizar");
+      }
+    } catch (err: any) {
+      setItems(prevItems);
+      setMessage(err.message || "No se pudo actualizar");
+    } finally {
+      setUpdatingIds((prev) => prev.filter((x) => x !== id));
+    }
+  }, [items]);
+
+  const updateUbicacion = useCallback(async (id: string, value: string) => {
+    const upper = value.trim().toUpperCase();
+    const prevItems = items.map((item) => ({
+      ...item,
+      extraData: item.extraData ? { ...item.extraData } : item.extraData
+    }));
+
+    setUpdatingIds((prev) => [...prev, id]);
+    setItems((curr) =>
+      curr.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              extraData: {
+                ...(item.extraData ?? {}),
+                ubicacion: upper || undefined
+              }
+            }
+          : item
+      )
+    );
+
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, ubicacion: upper || null })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "No se pudo actualizar");
+      }
+    } catch (err: any) {
+      setItems(prevItems);
+      setMessage(err.message || "No se pudo actualizar");
+    } finally {
+      setUpdatingIds((prev) => prev.filter((x) => x !== id));
+    }
+  }, [items]);
+
+  const updatePrestadoVendidoA = useCallback(async (id: string, value: string) => {
     const upper = value.trim().toUpperCase();
     const prevItems = items.map((item) => ({
       ...item,
@@ -623,9 +735,9 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     } finally {
       setUpdatingIds((prev) => prev.filter((x) => x !== id));
     }
-  };
+  }, [items]);
 
-  const updatePrice = async (id: string, value: number | null) => {
+  const updatePrice = useCallback(async (id: string, value: number | null) => {
     if (value !== null && (Number.isNaN(value) || value < 0)) {
       setMessage("Precio invalido");
       return;
@@ -654,43 +766,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       setItems(prevItems);
       setMessage(err.message || "No se pudo actualizar el precio");
     }
-  };
-
-  const formatDate = (value?: string | null) => {
-    if (!value) return "-";
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) {
-      const dd = String(parsed.getDate()).padStart(2, "0");
-      const mm = String(parsed.getMonth() + 1).padStart(2, "0");
-      const yyyy = parsed.getFullYear();
-      return `${dd}/${mm}/${yyyy}`;
-    }
-    const match = value.replace(/\./g, "/").match(/(\d{1,4})[\/](\d{1,2})[\/](\d{1,4})/);
-    if (match) {
-      const first = match[1];
-      const second = match[2];
-      const third = match[3];
-      const yearFirst = first.length === 4;
-      const day = yearFirst ? third : first;
-      const month = second;
-      const year = yearFirst ? first : third;
-      return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year.padStart(4, "0")}`;
-    }
-    return value;
-  };
-
-  const formatCurrencyMx = (value?: number | null) => {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
-    try {
-      return new Intl.NumberFormat("es-MX", {
-        style: "currency",
-        currency: "MXN",
-        minimumFractionDigits: 2
-      }).format(Number(value));
-    } catch {
-      return value?.toString() ?? "-";
-    }
-  };
+  }, [items]);
 
   const brandSuggestions = Array.from(
     new Set([
@@ -735,52 +811,119 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const activeModalPhoto = modalPhotos[modalActiveIndex] ?? null;
 
   const normalizedSearch = search.trim().toLowerCase();
-  const filteredItems = normalizedSearch
-    ? items.filter((item) => {
-        const haystack = [
-          item.skuInternal,
-          item.title ?? "",
-          item.extraData?.descripcion_local ?? "",
-          item.extraData?.descripcion_ml ?? "",
-          item.mlItemId ?? "",
-          item.sellerCustomField ?? "",
-          item.extraData?.estatus_interno ?? "",
-          item.extraData?.origen ?? "",
-          item.extraData?.coche ?? "",
-          item.extraData?.pieza ?? "",
-          item.extraData?.marca ?? "",
-          item.extraData?.ano_desde ?? "",
-          item.extraData?.ano_hasta ?? "",
-          item.extraData?.ubicacion ?? "",
-          item.extraData?.inventario ?? "",
-          item.extraData?.revision ?? "",
-          item.extraData?.facebook ?? "",
-          item.extraData?.prestado_vendido_a ?? "",
-          item.extraData?.fecha_prestamo_pago ?? "",
-          String(item.stock ?? ""),
-          String(item.price ?? "")
-        ]
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(normalizedSearch);
-      })
-    : items;
+  const searchFilteredItems = useMemo(() => {
+    if (!normalizedSearch) return items;
+    return items.filter((item) => {
+      const haystack = [
+        item.skuInternal,
+        item.title ?? "",
+        item.extraData?.descripcion_local ?? "",
+        item.extraData?.descripcion_ml ?? "",
+        item.mlItemId ?? "",
+        item.sellerCustomField ?? "",
+        item.extraData?.estatus_interno ?? "",
+        item.extraData?.origen ?? "",
+        item.extraData?.coche ?? "",
+        item.extraData?.pieza ?? "",
+        item.extraData?.marca ?? "",
+        item.extraData?.ano_desde ?? "",
+        item.extraData?.ano_hasta ?? "",
+        item.extraData?.ubicacion ?? "",
+        item.extraData?.inventario ?? "",
+        item.extraData?.revision ?? "",
+        item.extraData?.facebook ?? "",
+        item.extraData?.prestado_vendido_a ?? "",
+        item.extraData?.fecha_prestamo_pago ?? "",
+        String(item.stock ?? ""),
+        String(item.price ?? "")
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedSearch);
+    });
+  }, [items, normalizedSearch]);
 
-  const rowClassRules = {
-    "row-vendido": (params: any) =>
-      (params.data?.extraData?.estatus_interno ?? "").toString().toUpperCase() === "VENDIDO",
-    "row-prestado": (params: any) =>
-      (params.data?.extraData?.estatus_interno ?? "").toString().toUpperCase() === "PRESTADO"
-  };
+  const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
+  const filteredItems = useMemo(() => {
+    if (!normalizedStatusFilter) return searchFilteredItems;
+    return searchFilteredItems.filter((item) => {
+      const current = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+      const label = current.length ? current : "SIN ESTATUS";
+      return label === normalizedStatusFilter;
+    });
+  }, [searchFilteredItems, normalizedStatusFilter]);
 
-  const defaultColDef = {
-    resizable: true,
-    sortable: true,
-    filter: true,
-    minWidth: 120
-  };
+  const statusCounters = useMemo(() => {
+    const counts: Record<string, number> = {};
+    items.forEach((item) => {
+      const raw = (item.extraData?.estatus_interno ?? "").toString().trim();
+      const key = raw.length ? raw.toUpperCase() : "SIN ESTATUS";
+      counts[key] = (counts[key] ?? 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => {
+      if (a[1] === b[1]) {
+        return a[0].localeCompare(b[0]);
+      }
+      return b[1] - a[1];
+    });
+  }, [items]);
 
-  const columnDefs = [
+  const rowClassRules = useMemo(
+    () => ({
+      "row-vendido": (params: any) =>
+        (params.data?.extraData?.estatus_interno ?? "").toString().toUpperCase() === "VENDIDO",
+      "row-prestado": (params: any) =>
+        (params.data?.extraData?.estatus_interno ?? "").toString().toUpperCase() === "PRESTADO"
+    }),
+    []
+  );
+
+  const handleCellKeyDown = useCallback((event: CellKeyDownEvent) => {
+    if (event.event?.key === "Enter") {
+      event.api.stopEditing();
+      event.event.preventDefault();
+    }
+  }, []);
+
+  const handleSelectionChanged = useCallback((event: SelectionChangedEvent) => {
+    const rows = (event.api.getSelectedRows() ?? []) as Item[];
+    setSelectedIds(rows.map((row) => row.id));
+    if (!rows.length && !event.api.getFocusedCell()) {
+      setFocusedRowInfo(null);
+    }
+  }, []);
+
+  const handleRowSelected = useCallback((event: RowSelectedEvent) => {
+    if (event.node.isSelected() && event.node.data) {
+      setFocusedRowInfo(toFocusedInfo(event.node.data as Item));
+      return;
+    }
+    if (!event.api.getFocusedCell() && event.api.getSelectedRows().length === 0) {
+      setFocusedRowInfo(null);
+    }
+  }, []);
+
+  const handleCellFocused = useCallback((event: CellFocusedEvent) => {
+    if (event.rowIndex == null || event.rowIndex < 0) {
+      setFocusedRowInfo(null);
+      return;
+    }
+    const data = event.api?.getDisplayedRowAtIndex(event.rowIndex)?.data as Item | undefined;
+    setFocusedRowInfo(toFocusedInfo(data));
+  }, []);
+
+  const defaultColDef = useMemo(
+    () => ({
+      resizable: true,
+      sortable: true,
+      filter: true,
+      minWidth: 120
+    }),
+    []
+  );
+
+  const columnDefs = useMemo(
+    () => [
     {
       headerName: "Sel",
       checkboxSelection: true,
@@ -819,7 +962,32 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       },
       valueSetter: (p: any) => {
         const val = (p.newValue ?? "").toString().toUpperCase();
-        p.data.extraData = { ...(p.data.extraData ?? {}), estatus_interno: val };
+        const existingBuyer = (p.data.extraData?.prestado_vendido_a ?? "").toString();
+        let overrideBuyer: string | null | undefined = undefined;
+
+        if (val === "VENDIDO" || val === "PRESTADO") {
+          const question = val === "VENDIDO" ? "¿A quien se vendio?" : "¿A quien se presto?";
+          const errorText = val === "VENDIDO" ? "Debes indicar a quien se vendio" : "Debes indicar a quien se presto";
+          const response = window.prompt(question, existingBuyer);
+          if (response === null) {
+            setMessage("Actualizacion cancelada");
+            return false;
+          }
+          const cleaned = response.trim();
+          if (!cleaned.length) {
+            setMessage(errorText);
+            return false;
+          }
+          overrideBuyer = cleaned.toUpperCase();
+        }
+
+        const nextExtra = {
+          ...(p.data.extraData ?? {}),
+          estatus_interno: val,
+          ...(overrideBuyer !== undefined ? { prestado_vendido_a: overrideBuyer || undefined } : {})
+        };
+
+        p.data.extraData = nextExtra;
         setItems((curr) =>
           curr.map((row) =>
             row.id === p.data.id
@@ -827,13 +995,16 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
                   ...row,
                   extraData: {
                     ...(row.extraData ?? {}),
-                    estatus_interno: val
+                    estatus_interno: val,
+                    ...(overrideBuyer !== undefined
+                      ? { prestado_vendido_a: overrideBuyer || undefined }
+                      : {})
                   }
                 }
               : row
           )
         );
-        updateEstatusInterno(p.data.id, val);
+        updateEstatusInterno(p.data.id, val, overrideBuyer);
         return true;
       },
       maxWidth: 170
@@ -868,7 +1039,8 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       headerName: "Stock",
       field: "stock",
       maxWidth: 100,
-      filter: "agNumberColumnFilter"
+      filter: "agNumberColumnFilter",
+      cellStyle: { textAlign: "right" }
     },
     {
       headerName: "Pieza",
@@ -896,25 +1068,51 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     },
     {
       headerName: "Origen",
-      valueGetter: (p: any) => p.data.extraData?.origen ?? "-",
+      editable: true,
+      cellEditor: "agSelectCellEditor",
+      cellEditorParams: {
+        values: sortedOrigenOptions
+      },
+      valueGetter: (p: any) => p.data.extraData?.origen ?? "",
+      valueSetter: (p: any) => {
+        const val = (p.newValue ?? "").toString().toUpperCase();
+        const nextExtra = {
+          ...(p.data.extraData ?? {}),
+          origen: val
+        };
+        p.data.extraData = nextExtra;
+        setItems((curr) =>
+          curr.map((row) =>
+            row.id === p.data.id
+              ? {
+                  ...row,
+                  extraData: {
+                    ...(row.extraData ?? {}),
+                    origen: val
+                  }
+                }
+              : row
+          )
+        );
+        updateOrigen(p.data.id, val);
+        return true;
+      },
       maxWidth: 160
     },
     {
       headerName: "Precio",
       field: "price",
       editable: true,
-      singleClickEdit: true,
       valueFormatter: (p: any) => formatCurrencyMx(p.value),
       valueSetter: (p: any) => {
         const raw = (p.newValue ?? "").toString();
-        const trimmed = raw.trim();
+        const trimmed = raw.replace(/[$,\s]/g, "").trim();
         if (!trimmed.length) {
           p.data.price = null;
           updatePrice(p.data.id, null);
           return true;
         }
-        const cleaned = trimmed.replace(/[$\s]/g, "").replace(/,/g, ".");
-        const priceValue = Number(cleaned);
+        const priceValue = Number(trimmed);
         if (Number.isNaN(priceValue) || priceValue < 0) {
           setMessage("Precio invalido");
           return false;
@@ -924,7 +1122,6 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
         return true;
       },
       maxWidth: 130,
-      filter: "agNumberColumnFilter",
       cellStyle: { textAlign: "right", paddingRight: "12px" }
     },
     {
@@ -932,11 +1129,36 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       valueGetter: (p: any) => p.data.extraData?.precio_compra ?? null,
       valueFormatter: (p: any) => formatCurrencyMx(p.value),
       maxWidth: 150,
-      filter: "agNumberColumnFilter"
+      filter: "agNumberColumnFilter",
+      cellStyle: { textAlign: "right" }
     },
     {
       headerName: "Ubicacion",
-      valueGetter: (p: any) => p.data.extraData?.ubicacion ?? "-",
+      editable: true,
+      valueGetter: (p: any) => p.data.extraData?.ubicacion ?? "",
+      valueSetter: (p: any) => {
+        const val = (p.newValue ?? "").toString().toUpperCase();
+        const nextExtra = {
+          ...(p.data.extraData ?? {}),
+          ubicacion: val
+        };
+        p.data.extraData = nextExtra;
+        setItems((curr) =>
+          curr.map((row) =>
+            row.id === p.data.id
+              ? {
+                  ...row,
+                  extraData: {
+                    ...(row.extraData ?? {}),
+                    ubicacion: val
+                  }
+                }
+              : row
+          )
+        );
+        updateUbicacion(p.data.id, val);
+        return true;
+      },
       maxWidth: 140
     },
     {
@@ -1073,7 +1295,19 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       filter: false,
       sortable: false
     }
-  ];
+    ],
+    [
+      openPhotoModal,
+      requestDeleteAuthorization,
+      sortedEstatusInternoOptions,
+      sortedOrigenOptions,
+      updateEstatusInterno,
+      updateOrigen,
+      updatePrestadoVendidoA,
+      updatePrice,
+      updateUbicacion
+    ]
+  );
 
   return (
     <>
@@ -1390,6 +1624,75 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               </span>
             </div>
           </div>
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] uppercase tracking-[0.4em] text-slate-400">Seleccion actual</p>
+              {focusedRowInfo && (
+                <span className="text-[11px] text-slate-500">Se actualiza al cambiar de celda</span>
+              )}
+            </div>
+            {focusedRowInfo ? (
+              <div className="mt-3 grid gap-4 sm:grid-cols-4">
+                <div>
+                  <p className="text-xs text-slate-400">SKU</p>
+                  <p className="text-xl font-semibold tracking-wide text-slate-100">{focusedRowInfo.sku}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Coche</p>
+                  <p className="text-xl font-semibold text-slate-100">{focusedRowInfo.coche}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Año</p>
+                  <p className="text-xl font-semibold text-slate-100">{focusedRowInfo.ano}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Descripción</p>
+                  <p className="text-xl font-semibold text-slate-100">
+                    {(() => {
+                      const item = items.find((it) => it.skuInternal === focusedRowInfo.sku);
+                      if (!item) return "-";
+                      const extra = item.extraData ?? {};
+                      const yearSegment = extra.ano_desde || extra.ano_hasta
+                        ? extra.ano_desde && extra.ano_hasta && extra.ano_desde !== extra.ano_hasta
+                          ? `${extra.ano_desde}-${extra.ano_hasta}`
+                          : extra.ano_desde ?? extra.ano_hasta
+                        : "";
+                      const parts = [extra.pieza, extra.marca, extra.coche, yearSegment, item.skuInternal]
+                        .map((part) => (part ?? "").toString().trim())
+                        .filter((part) => part.length);
+                      return parts.length ? parts.join(" ") : "-";
+                    })()}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-400">
+                Selecciona una celda o marca un registro para ver el SKU, el coche, el rango de años y la descripción.
+              </p>
+            )}
+          </div>
+          {statusCounters.length > 0 && (
+            <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
+              {statusCounters.map(([label, count]) => {
+                const isActive = statusFilter === label;
+                const baseClasses = "flex items-center gap-2 rounded-xl border px-3 py-1 text-left transition focus:outline-none";
+                const activeClasses = isActive
+                  ? "border-amber-400 bg-amber-400/20 text-amber-100"
+                  : "border-slate-600 bg-slate-800/70 hover:border-amber-300";
+                return (
+                  <button
+                    type="button"
+                    key={label}
+                    onClick={() => setStatusFilter(isActive ? null : label)}
+                    className={`${baseClasses} ${activeClasses}`}
+                  >
+                    <span className="text-base font-bold text-amber-300">{count}</span>
+                    <span className="font-semibold">{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div
             className="ag-theme-quartz rounded-xl border border-slate-700 shadow-inner"
             style={{ height: 600 }}
@@ -1405,13 +1708,15 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               rowSelection="multiple"
               rowDeselection={false}
               suppressRowClickSelection
-              components={{ statusInternoEditor: StatusInternoEditor }}
               enableCellTextSelection={true}
+              enableRangeSelection
               animateRows
+              copyHeadersToClipboard
               quickFilterText={search}
-              onSelectionChanged={(event: any) =>
-                setSelectedIds(event.api.getSelectedRows().map((r: any) => r.id))
-              }
+              onCellKeyDown={handleCellKeyDown}
+              onCellFocused={handleCellFocused}
+              onRowSelected={handleRowSelected}
+              onSelectionChanged={handleSelectionChanged}
               rowClassRules={rowClassRules}
             />
           </div>

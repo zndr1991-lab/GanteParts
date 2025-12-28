@@ -25,9 +25,11 @@ const deleteSchema = z.object({
 const updateSchema = z.object({
   id: z.string().min(1),
   estatusInterno: z.string().optional().nullable(),
-  status: z.string().optional(),
+  status: z.enum(["active", "paused", "inactive"]).optional(),
   fechaPrestamoPago: z.string().optional().nullable(),
   prestadoVendidoA: z.string().optional().nullable(),
+  origen: z.string().optional().nullable(),
+  ubicacion: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_PHOTOS).optional(),
   price: z.number().nonnegative().nullable().optional()
 });
@@ -137,7 +139,17 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "Payload invalido" }, { status: 400 });
   }
 
-  const { id, estatusInterno, status, fechaPrestamoPago, prestadoVendidoA, photos, price } = parsed.data;
+  const {
+    id,
+    estatusInterno,
+    status,
+    fechaPrestamoPago,
+    prestadoVendidoA,
+    origen,
+    ubicacion,
+    photos,
+    price
+  } = parsed.data;
 
   if (status && !["active", "paused", "inactive"].includes(status)) {
     return NextResponse.json({ error: "Estatus invalido" }, { status: 400 });
@@ -166,6 +178,18 @@ export async function PATCH(req: Request) {
     nextExtra.prestado_vendido_a = prestadoVendidoA.trim();
   } else if (prestadoVendidoA === null) {
     delete nextExtra.prestado_vendido_a;
+  }
+
+  if (origen && origen.trim()) {
+    nextExtra.origen = origen.trim();
+  } else if (origen === null) {
+    delete nextExtra.origen;
+  }
+
+  if (ubicacion && ubicacion.trim()) {
+    nextExtra.ubicacion = ubicacion.trim();
+  } else if (ubicacion === null) {
+    delete nextExtra.ubicacion;
   }
 
   if (photos !== undefined) {
@@ -204,6 +228,8 @@ export async function PATCH(req: Request) {
         status: status ?? null,
         fechaPrestamoPago: fechaPrestamoPago ?? null,
         prestadoVendidoA: prestadoVendidoA ?? null,
+        origen: origen ?? null,
+        ubicacion: ubicacion ?? null,
         price: price ?? null
       }
     }
