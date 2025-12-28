@@ -268,6 +268,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const [photoModalSaving, setPhotoModalSaving] = useState(false);
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
+  const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -340,6 +341,60 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     }
     await deleteItems(ids, trimmed);
   }, [deleteItems]);
+
+  const performMlAction = useCallback(
+    async (action: "pause" | "activate") => {
+      if (!selectedIds.length) {
+        setMessage("Selecciona al menos un registro");
+        return;
+      }
+      const selectedSet = new Set(selectedIds);
+      const eligible = items.filter(
+        (item) => selectedSet.has(item.id) && item.mlItemId && item.mlItemId.trim().length
+      );
+      if (!eligible.length) {
+        setMessage("Los registros seleccionados no tienen codigo de Mercado Libre");
+        return;
+      }
+      const confirmText =
+        action === "pause"
+          ? `¿Pausar ${eligible.length} ${eligible.length === 1 ? "publicacion" : "publicaciones"} en Mercado Libre?`
+          : `¿Activar ${eligible.length} ${eligible.length === 1 ? "publicacion" : "publicaciones"} en Mercado Libre?`;
+      const confirmed = window.confirm(confirmText);
+      if (!confirmed) {
+        setMessage("Accion cancelada");
+        return;
+      }
+
+      setMlAction(action);
+      setMessage(null);
+      try {
+        const res = await fetch("/api/mercadolibre/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: eligible.map((item) => item.id), action })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "No se pudo sincronizar con Mercado Libre");
+        }
+        const parts: string[] = [];
+        if (typeof data.successCount === "number") {
+          parts.push(`Exitosos: ${data.successCount}`);
+        }
+        if (Array.isArray(data.failed) && data.failed.length) {
+          parts.push(`Fallidos: ${data.failed.length}`);
+        }
+        setMessage(parts.length ? parts.join(" | ") : "Mercado Libre actualizado");
+        await refresh();
+      } catch (err: any) {
+        setMessage(err.message || "No se pudo sincronizar con Mercado Libre");
+      } finally {
+        setMlAction(null);
+      }
+    },
+    [items, refresh, selectedIds]
+  );
 
   const fileToDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -835,6 +890,24 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const anoDesdeNumber = form.anoDesde ? Number(form.anoDesde) : undefined;
   const anoHastaNumber = form.anoHasta ? Number(form.anoHasta) : undefined;
   const activeModalPhoto = modalPhotos[modalActiveIndex] ?? null;
+  const { selectedWithMlCount, hasSelectedWithoutMl } = useMemo(() => {
+    if (!selectedIds.length) {
+      return { selectedWithMlCount: 0, hasSelectedWithoutMl: false };
+    }
+    const selectedSet = new Set(selectedIds);
+    let withMl = 0;
+    let withoutMl = 0;
+    for (const item of items) {
+      if (!selectedSet.has(item.id)) continue;
+      if (item.mlItemId && item.mlItemId.trim().length) {
+        withMl += 1;
+      } else {
+        withoutMl += 1;
+      }
+    }
+    return { selectedWithMlCount: withMl, hasSelectedWithoutMl: withoutMl > 0 };
+  }, [items, selectedIds]);
+  const mlActionDisabled = selectedWithMlCount === 0 || mlAction !== null;
 
   const normalizedSearch = search.trim().toLowerCase();
   const searchFilteredItems = useMemo(() => {
@@ -1696,6 +1769,35 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
                 Selecciona una celda o marca un registro para ver el SKU, el coche, el rango de años y la descripción.
               </p>
             )}
+          </div>
+          <div className="flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <p className="text-xs text-slate-400">Acciones Mercado Libre</p>
+              <p className="text-[11px] text-slate-500">
+                {selectedWithMlCount
+                  ? `${selectedWithMlCount} ${selectedWithMlCount === 1 ? "seleccionado" : "seleccionados"} con codigo`
+                  : "Selecciona registros con codigo de Mercado Libre"}
+                {hasSelectedWithoutMl ? " · Algunos seleccionados no tienen codigo" : ""}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => performMlAction("pause")}
+                disabled={mlActionDisabled}
+                className="rounded-md border border-amber-400 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-400/10 disabled:opacity-60"
+              >
+                {mlAction === "pause" ? "Pausando..." : "Pausar en ML"}
+              </button>
+              <button
+                type="button"
+                onClick={() => performMlAction("activate")}
+                disabled={mlActionDisabled}
+                className="rounded-md border border-teal-400 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-teal-200 hover:bg-teal-400/10 disabled:opacity-60"
+              >
+                {mlAction === "activate" ? "Activando..." : "Activar en ML"}
+              </button>
+            </div>
           </div>
           {statusCounters.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
