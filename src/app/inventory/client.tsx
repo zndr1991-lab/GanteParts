@@ -1398,8 +1398,6 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     [
       openPhotoModal,
       requestDeleteAuthorization,
-      sortedEstatusInternoOptions,
-      sortedOrigenOptions,
       updateEstatusInterno,
       updateOrigen,
       updatePrestadoVendidoA,
