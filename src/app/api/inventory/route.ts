@@ -33,7 +33,8 @@ const updateSchema = z.object({
   origen: z.string().optional().nullable(),
   ubicacion: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_PHOTOS).optional(),
-  price: z.number().nonnegative().nullable().optional()
+  price: z.number().nonnegative().nullable().optional(),
+  mlItemId: z.string().optional().nullable()
 });
 
 const serializeItem = (item: any) => ({
@@ -150,7 +151,8 @@ export async function PATCH(req: Request) {
     origen,
     ubicacion,
     photos,
-    price
+    price,
+    mlItemId
   } = parsed.data;
 
   if (status && !["active", "paused", "inactive"].includes(status)) {
@@ -215,6 +217,15 @@ export async function PATCH(req: Request) {
     updateData.price = price === null ? null : new Prisma.Decimal(price);
   }
 
+  if (mlItemId !== undefined) {
+    if (mlItemId === null) {
+      updateData.mlItemId = null;
+    } else {
+      const normalized = mlItemId.trim().toUpperCase();
+      updateData.mlItemId = normalized.length ? normalized : null;
+    }
+  }
+
   const item = await prisma.inventoryItem.update({
     where: { id },
     data: updateData
@@ -232,7 +243,8 @@ export async function PATCH(req: Request) {
         prestadoVendidoA: prestadoVendidoA ?? null,
         origen: origen ?? null,
         ubicacion: ubicacion ?? null,
-        price: price ?? null
+        price: price ?? null,
+        mlItemId: mlItemId ?? null
       }
     }
   });

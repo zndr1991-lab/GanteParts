@@ -778,6 +778,37 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     }
   }, [items]);
 
+  const updateMlItemId = useCallback(async (id: string, value: string) => {
+    const upper = value.trim().toUpperCase();
+    const nextValue = upper.length ? upper : null;
+    const prevItems = items.map((item) => ({
+      ...item,
+      extraData: item.extraData ? { ...item.extraData } : item.extraData
+    }));
+
+    setUpdatingIds((prev) => [...prev, id]);
+    setItems((curr) =>
+      curr.map((item) => (item.id === id ? { ...item, mlItemId: nextValue } : item))
+    );
+
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, mlItemId: nextValue })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "No se pudo actualizar");
+      }
+    } catch (err: any) {
+      setItems(prevItems);
+      setMessage(err.message || "No se pudo actualizar");
+    } finally {
+      setUpdatingIds((prev) => prev.filter((x) => x !== id));
+    }
+  }, [items]);
+
   const updatePrestadoVendidoA = useCallback(async (id: string, value: string) => {
     const upper = value.trim().toUpperCase();
     const prevItems = items.map((item) => ({
@@ -1263,7 +1294,13 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     {
       headerName: "Codigo de Mercado Libre",
       field: "mlItemId",
-      maxWidth: 180
+      editable: true,
+      valueFormatter: (p: any) => (p.value && p.value.length ? p.value : "-"),
+      valueSetter: (p: any) => {
+        updateMlItemId(p.data.id, (p.newValue ?? "").toString());
+        return true;
+      },
+      maxWidth: 200
     },
     {
       headerName: "Prestado a/Vendido a",
@@ -1402,7 +1439,8 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       updateOrigen,
       updatePrestadoVendidoA,
       updatePrice,
-      updateUbicacion
+      updateUbicacion,
+      updateMlItemId
     ]
   );
 
