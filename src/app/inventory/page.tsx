@@ -14,10 +14,14 @@ export default async function InventoryPage() {
     orderBy: { updatedAt: "desc" }
   });
 
-  const plainItems = items.map((item) => ({
-    ...item,
-    price: item.price !== null && item.price !== undefined ? Number(item.price) : null
-  }));
+  const plainItems = items.map((item) => {
+    const extraData = typeof item.extraData === "object" && item.extraData !== null ? item.extraData : null;
+    return {
+      ...item,
+      extraData,
+      price: item.price !== null && item.price !== undefined ? Number(item.price) : null
+    };
+  });
 
   return <InventoryClient initialItems={plainItems} />;
 }

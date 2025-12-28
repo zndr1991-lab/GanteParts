@@ -3,12 +3,6 @@
 import { AgGridReact } from "ag-grid-react";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
-import type {
-  CellFocusedEvent,
-  CellKeyDownEvent,
-  RowSelectedEvent,
-  SelectionChangedEvent
-} from "ag-grid-community";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Item = {
@@ -27,6 +21,38 @@ type FocusedInfo = {
   sku: string;
   coche: string;
   ano: string;
+};
+
+type GridApiLite = {
+  stopEditing?: () => void;
+  getFocusedCell?: () => unknown;
+  getSelectedRows?: () => Item[];
+  getDisplayedRowAtIndex?: (index: number) => { data?: Item } | null;
+};
+
+type CellKeyDownHandlerEvent = {
+  api: GridApiLite;
+  event?: {
+    key?: string;
+    preventDefault: () => void;
+  } | null;
+};
+
+type SelectionChangedEventLite = {
+  api: GridApiLite;
+};
+
+type RowSelectedEventLite = {
+  node: {
+    isSelected: () => boolean;
+    data?: Item | null;
+  };
+  api: GridApiLite;
+};
+
+type CellFocusedEventLite = {
+  rowIndex?: number | null;
+  api?: GridApiLite;
 };
 
 const brandOptions = [
@@ -878,37 +904,37 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     []
   );
 
-  const handleCellKeyDown = useCallback((event: CellKeyDownEvent) => {
+  const handleCellKeyDown = useCallback((event: CellKeyDownHandlerEvent) => {
     if (event.event?.key === "Enter") {
-      event.api.stopEditing();
-      event.event.preventDefault();
+      event.api.stopEditing?.();
+      event.event?.preventDefault();
     }
   }, []);
 
-  const handleSelectionChanged = useCallback((event: SelectionChangedEvent) => {
-    const rows = (event.api.getSelectedRows() ?? []) as Item[];
+  const handleSelectionChanged = useCallback((event: SelectionChangedEventLite) => {
+    const rows = (event.api.getSelectedRows?.() ?? []) as Item[];
     setSelectedIds(rows.map((row) => row.id));
-    if (!rows.length && !event.api.getFocusedCell()) {
+    if (!rows.length && !event.api.getFocusedCell?.()) {
       setFocusedRowInfo(null);
     }
   }, []);
 
-  const handleRowSelected = useCallback((event: RowSelectedEvent) => {
+  const handleRowSelected = useCallback((event: RowSelectedEventLite) => {
     if (event.node.isSelected() && event.node.data) {
       setFocusedRowInfo(toFocusedInfo(event.node.data as Item));
       return;
     }
-    if (!event.api.getFocusedCell() && event.api.getSelectedRows().length === 0) {
+    if (!event.api.getFocusedCell?.() && (event.api.getSelectedRows?.().length ?? 0) === 0) {
       setFocusedRowInfo(null);
     }
   }, []);
 
-  const handleCellFocused = useCallback((event: CellFocusedEvent) => {
+  const handleCellFocused = useCallback((event: CellFocusedEventLite) => {
     if (event.rowIndex == null || event.rowIndex < 0) {
       setFocusedRowInfo(null);
       return;
     }
-    const data = event.api?.getDisplayedRowAtIndex(event.rowIndex)?.data as Item | undefined;
+    const data = event.api?.getDisplayedRowAtIndex?.(event.rowIndex)?.data as Item | undefined;
     setFocusedRowInfo(toFocusedInfo(data));
   }, []);
 

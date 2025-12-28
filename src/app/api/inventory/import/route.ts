@@ -67,7 +67,8 @@ const statusMap: Record<string, string> = {
 
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  const userId = session?.user?.id;
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const form = await req.formData();
   const file = form.get("file");
@@ -127,9 +128,9 @@ export async function POST(req: Request) {
       stock,
       mlItemId: normalized.mlItemId ? String(normalized.mlItemId) : null,
       sellerCustomField: normalized.sellerCustomField ? String(normalized.sellerCustomField) : null,
-      ownerId: session.user.id,
+      ownerId: userId,
       status: statusValue,
-      extraData: Object.keys(extras).length ? extras : null
+      extraData: Object.keys(extras).length ? extras : undefined
     });
   });
 
@@ -142,7 +143,7 @@ export async function POST(req: Request) {
   await prisma.auditLog.create({
     data: {
       action: "inventory:import",
-      userId: session.user.id,
+      userId,
       metadata: {
         totalRows: rows.length,
         inserted: result.count,

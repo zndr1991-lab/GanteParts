@@ -19,8 +19,7 @@
     "incremental": true,
     "types": [
       "next",
-      "next/types/global",
-      "next/image-types"
+      "next/types/global"
     ],
     "baseUrl": ".",
     "paths": {
