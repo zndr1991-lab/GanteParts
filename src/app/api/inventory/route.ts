@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { activateItem, pauseItem } from "@/lib/mercadolibre";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -208,22 +209,40 @@ export async function PATCH(req: Request) {
     }
   }
 
+  let nextMlItemId: string | null | undefined = existing.mlItemId;
+  if (mlItemId !== undefined) {
+    if (mlItemId === null) {
+      nextMlItemId = null;
+    } else {
+      const normalized = mlItemId.trim().toUpperCase();
+      nextMlItemId = normalized.length ? normalized : null;
+    }
+  }
+
+  if (status && ["active", "paused"].includes(status) && status !== existing.status) {
+    if (!nextMlItemId) {
+      return NextResponse.json({ error: "El registro no tiene codigo de Mercado Libre" }, { status: 400 });
+    }
+    try {
+      if (status === "paused") {
+        await pauseItem(session.user.id, nextMlItemId);
+      } else if (status === "active") {
+        await activateItem(session.user.id, nextMlItemId);
+      }
+    } catch (err: any) {
+      const message = err?.message || "No se pudo sincronizar con Mercado Libre";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
   const updateData: Prisma.InventoryItemUpdateInput = {
     extraData: nextExtra,
-    status: status ?? undefined
+    status: status ?? undefined,
+    mlItemId: mlItemId !== undefined ? nextMlItemId : undefined
   };
 
   if (price !== undefined) {
     updateData.price = price === null ? null : new Prisma.Decimal(price);
-  }
-
-  if (mlItemId !== undefined) {
-    if (mlItemId === null) {
-      updateData.mlItemId = null;
-    } else {
-      const normalized = mlItemId.trim().toUpperCase();
-      updateData.mlItemId = normalized.length ? normalized : null;
-    }
   }
 
   const item = await prisma.inventoryItem.update({

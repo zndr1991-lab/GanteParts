@@ -55,6 +55,15 @@ type CellFocusedEventLite = {
   api?: GridApiLite;
 };
 
+type NotificationItem = {
+  id: string;
+  message: string;
+  createdAt: string;
+  itemId?: string | null;
+  status?: string | null;
+  success: boolean;
+};
+
 const brandOptions = [
   "ACURA",
   "AUDI",
@@ -232,6 +241,33 @@ const formatCurrencyMx = (value?: number | null) => {
   }
 };
 
+const formatRelativeTime = (value: string) => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  const diffMs = Date.now() - parsed.getTime();
+  if (diffMs < 45_000) return "Hace unos segundos";
+  if (diffMs < 90_000) return "Hace un minuto";
+  const minutes = Math.round(diffMs / 60_000);
+  if (minutes < 60) return `Hace ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `Hace ${hours} h`;
+  const days = Math.round(hours / 24);
+  return `Hace ${days} d`;
+};
+
+const getStatusBadgeClass = (status?: string | null) => {
+  switch ((status ?? "").toLowerCase()) {
+    case "active":
+      return "border-emerald-400/50 bg-emerald-500/20 text-emerald-100";
+    case "paused":
+      return "border-amber-400/50 bg-amber-500/20 text-amber-100";
+    case "inactive":
+      return "border-rose-400/50 bg-rose-500/20 text-rose-100";
+    default:
+      return "border-slate-600 bg-slate-800/60 text-slate-200";
+  }
+};
+
 export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const [items, setItems] = useState<Item[]>(initialItems);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -258,6 +294,9 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const [pending, setPending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
   const [gridApi, setGridApi] = useState<any>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
@@ -269,6 +308,70 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastNotificationIdRef = useRef<string | null>(null);
+  const isMountedRef = useRef(true);
+
+  const triggerNotificationToast = useCallback((entry: NotificationItem) => {
+    setToastNotification(entry);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastNotification(null);
+      toastTimeoutRef.current = null;
+    }, 6000);
+  }, []);
+
+  const fetchNotifications = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (!silent && isMountedRef.current) {
+      setNotificationsLoading(true);
+    }
+    try {
+      const res = await fetch("/api/notifications?limit=12", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error("No se pudieron obtener las notificaciones");
+      }
+      const data = await res.json().catch(() => ({}));
+      const list: NotificationItem[] = Array.isArray(data.notifications) ? data.notifications : [];
+      if (!isMountedRef.current) return;
+      setNotifications(list);
+      if (!list.length) return;
+      const newest = list[0];
+      if (!lastNotificationIdRef.current) {
+        lastNotificationIdRef.current = newest.id;
+        return;
+      }
+      if (lastNotificationIdRef.current !== newest.id) {
+        lastNotificationIdRef.current = newest.id;
+        triggerNotificationToast(newest);
+      }
+    } catch (err: any) {
+      if (!silent && isMountedRef.current) {
+        setMessage(err?.message || "No se pudieron obtener las notificaciones");
+      }
+    } finally {
+      if (!silent && isMountedRef.current) {
+        setNotificationsLoading(false);
+      }
+    }
+  }, [triggerNotificationToast]);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    fetchNotifications({ silent: true });
+    const interval = setInterval(() => fetchNotifications({ silent: true }), 20000);
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -1446,6 +1549,42 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
 
   return (
     <>
+      {toastNotification && (
+        <div className="fixed right-4 top-4 z-50 w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900/95 p-4 shadow-2xl backdrop-blur">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.4em] text-amber-400">Mercado Libre</p>
+              <p className="text-sm text-slate-100">{toastNotification.message}</p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {formatRelativeTime(toastNotification.createdAt)}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:border-amber-400"
+              onClick={() => {
+                if (toastTimeoutRef.current) {
+                  clearTimeout(toastTimeoutRef.current);
+                  toastTimeoutRef.current = null;
+                }
+                setToastNotification(null);
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+            {toastNotification.itemId && (
+              <span className="font-mono text-[11px] tracking-wide">{toastNotification.itemId}</span>
+            )}
+            {toastNotification.status && (
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] ${getStatusBadgeClass(toastNotification.status)}`}>
+                {toastNotification.status}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       <main className="min-h-screen px-6 py-8">
         <div className="max-w-screen-2xl mx-auto space-y-6">
           <header className="flex flex-col gap-2">
@@ -1461,6 +1600,45 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
             </div>
             <p className="text-slate-300 text-sm">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
           </header>
+
+        <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Notificaciones Mercado Libre</h2>
+              <p className="text-xs text-slate-400">Sincronizamos cada 20 segundos o cuando hagas clic en actualizar.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => fetchNotifications({ silent: false })}
+              disabled={notificationsLoading}
+              className="px-3 py-2 rounded-md border border-slate-600 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60"
+            >
+              {notificationsLoading ? "Actualizando..." : "Actualizar"}
+            </button>
+          </div>
+          {notifications.length ? (
+            <ul className="divide-y divide-slate-700 text-sm text-slate-100">
+              {notifications.slice(0, 6).map((entry) => (
+                <li key={entry.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm">{entry.message}</p>
+                    <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+                  </div>
+                  <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 sm:items-end">
+                    {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
+                    {entry.status && (
+                      <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
+                        {entry.status}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-slate-400">Sin eventos recientes.</p>
+          )}
+        </section>
 
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-4">
           <h2 className="text-lg font-semibold">Carga manual</h2>

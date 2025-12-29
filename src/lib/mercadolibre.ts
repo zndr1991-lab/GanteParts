@@ -1,3 +1,4 @@
+import type { MercadoLibreAccount } from "@prisma/client";
 import { prisma } from "./prisma";
 
 const API_BASE = "https://api.mercadolibre.com";
@@ -11,6 +12,10 @@ function requiredEnv(name: string) {
 
 export async function getMercadoLibreAccount(userId: string) {
   return prisma.mercadoLibreAccount.findFirst({ where: { userId } });
+}
+
+export async function getMercadoLibreAccountByMlUserId(mlUserId: string) {
+  return prisma.mercadoLibreAccount.findFirst({ where: { mlUserId } });
 }
 
 async function refreshToken(accountId: string, refreshTokenValue: string) {
@@ -47,18 +52,31 @@ async function refreshToken(accountId: string, refreshTokenValue: string) {
   });
 }
 
+async function ensureFreshAccount(account: MercadoLibreAccount) {
+  if (account.expiresAt.getTime() - Date.now() < 60_000) {
+    return refreshToken(account.id, account.refreshToken);
+  }
+  return account;
+}
+
 export async function getValidAccessToken(userId: string) {
   const account = await getMercadoLibreAccount(userId);
   if (!account) {
     throw new Error("Cuenta de Mercado Libre no vinculada");
   }
 
-  if (account.expiresAt.getTime() - Date.now() < 60_000) {
-    const refreshed = await refreshToken(account.id, account.refreshToken);
-    return refreshed.accessToken;
+  const fresh = await ensureFreshAccount(account);
+  return fresh.accessToken;
+}
+
+export async function getValidAccessTokenByMlUserId(mlUserId: string) {
+  const account = await getMercadoLibreAccountByMlUserId(mlUserId);
+  if (!account) {
+    throw new Error("Cuenta de Mercado Libre no vinculada");
   }
 
-  return account.accessToken;
+  const fresh = await ensureFreshAccount(account);
+  return fresh.accessToken;
 }
 
 async function mlFetch(token: string, path: string, init?: RequestInit) {
@@ -81,12 +99,18 @@ async function mlFetch(token: string, path: string, init?: RequestInit) {
 
 export async function pauseItem(userId: string, itemId: string) {
   const token = await getValidAccessToken(userId);
-  await mlFetch(token, `/items/${itemId}/pause`, { method: "POST" });
+  await mlFetch(token, `/items/${itemId}`, {
+    method: "PUT",
+    body: JSON.stringify({ status: "paused" })
+  });
 }
 
 export async function activateItem(userId: string, itemId: string) {
   const token = await getValidAccessToken(userId);
-  await mlFetch(token, `/items/${itemId}/activate`, { method: "POST" });
+  await mlFetch(token, `/items/${itemId}`, {
+    method: "PUT",
+    body: JSON.stringify({ status: "active" })
+  });
 }
 
 export async function updateStock(userId: string, itemId: string, availableQuantity: number) {
@@ -95,4 +119,9 @@ export async function updateStock(userId: string, itemId: string, availableQuant
     method: "PUT",
     body: JSON.stringify({ available_quantity: availableQuantity })
   });
+}
+
+export async function fetchItemSnapshotByMlUserId(mlUserId: string, itemId: string) {
+  const token = await getValidAccessTokenByMlUserId(mlUserId);
+  return mlFetch(token, `/items/${itemId}`);
 }
