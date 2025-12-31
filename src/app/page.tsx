@@ -23,6 +23,12 @@ export default function Home() {
             >
               Crear cuenta
             </Link>
+            <Link
+              href="/public-inventory"
+              className="px-4 py-2 rounded-lg border border-emerald-500/60 bg-emerald-500/10 text-emerald-200 font-medium hover:border-emerald-400 hover:bg-emerald-400/20 transition"
+            >
+              Inventario público
+            </Link>
           </div>
         </div>
       </div>
