@@ -385,7 +385,6 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
               </select>
             </div>
           </div>
-          </div>
         </section>
 
         <section className="mt-8 space-y-4">
