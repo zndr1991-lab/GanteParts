@@ -133,6 +133,7 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
   const [yearFilter, setYearFilter] = useState("ALL");
   const [pieceFilter, setPieceFilter] = useState("ALL");
   const [photoModal, setPhotoModal] = useState<null | { photos: string[]; index: number; title: string }>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   const openPhotoModal = useCallback((photoList: string[], startIndex: number, title: string) => {
     if (!photoList.length) return;
@@ -269,8 +270,8 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-8">
-        <section className="grid gap-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-xl shadow-black/40 md:grid-cols-2 lg:grid-cols-4">
+      <main className="mx-auto max-w-6xl px-3 py-6 sm:px-4 sm:py-8">
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-xl shadow-black/40">
           <div className="md:col-span-2 lg:col-span-4">
             <label className="text-sm text-slate-400" htmlFor="public-search">
               Buscar por SKU, modelo o palabra clave
@@ -284,92 +285,106 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
               onChange={(event) => setQuery(event.target.value)}
             />
           </div>
-          <div>
-            <label className="text-sm text-slate-400" htmlFor="brand-filter">
-              Filtrar por marca
-            </label>
-            <select
-              id="brand-filter"
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
-              value={brandFilter}
-              onChange={(event) => {
-                const next = event.target.value;
-                setBrandFilter(next);
-                setVehicleFilter("ALL");
-                setYearFilter("ALL");
-                setPieceFilter("ALL");
-              }}
+          <div className="mt-4 flex items-center justify-between md:hidden">
+            <span className="text-sm font-medium text-slate-300">Filtros avanzados</span>
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen((prev) => !prev)}
+              className="rounded-full border border-slate-700 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-slate-200"
+              aria-expanded={mobileFiltersOpen}
             >
-              <option value="ALL">Todas</option>
-              {brandOptions.map((brand) => (
-                <option key={brand} value={brand}>
-                  {brand}
-                </option>
-              ))}
-            </select>
+              {mobileFiltersOpen ? "Ocultar" : "Mostrar"}
+            </button>
           </div>
-          <div>
-            <label className="text-sm text-slate-400" htmlFor="vehicle-filter">
-              Filtrar por coche
-            </label>
-            <select
-              id="vehicle-filter"
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
-              value={vehicleFilter}
-              onChange={(event) => {
-                const next = event.target.value;
-                setVehicleFilter(next);
-                setYearFilter("ALL");
-                setPieceFilter("ALL");
-              }}
-            >
-              <option value="ALL">Todos</option>
-              {vehicleOptions.map((vehicle) => (
-                <option key={vehicle} value={vehicle}>
-                  {vehicle}
-                </option>
-              ))}
-            </select>
+          <div className={`${mobileFiltersOpen ? "grid" : "hidden"} gap-4 pt-4 md:grid md:grid-cols-2 lg:grid-cols-4`}>
+            <div>
+              <label className="text-sm text-slate-400" htmlFor="brand-filter">
+                Filtrar por marca
+              </label>
+              <select
+                id="brand-filter"
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
+                value={brandFilter}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setBrandFilter(next);
+                  setVehicleFilter("ALL");
+                  setYearFilter("ALL");
+                  setPieceFilter("ALL");
+                }}
+              >
+                <option value="ALL">Todas</option>
+                {brandOptions.map((brand) => (
+                  <option key={brand} value={brand}>
+                    {brand}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm text-slate-400" htmlFor="vehicle-filter">
+                Filtrar por coche
+              </label>
+              <select
+                id="vehicle-filter"
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
+                value={vehicleFilter}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setVehicleFilter(next);
+                  setYearFilter("ALL");
+                  setPieceFilter("ALL");
+                }}
+              >
+                <option value="ALL">Todos</option>
+                {vehicleOptions.map((vehicle) => (
+                  <option key={vehicle} value={vehicle}>
+                    {vehicle}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm text-slate-400" htmlFor="year-filter">
+                Filtrar por año
+              </label>
+              <select
+                id="year-filter"
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
+                value={yearFilter}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setYearFilter(next);
+                  setPieceFilter("ALL");
+                }}
+              >
+                <option value="ALL">Todos</option>
+                {yearOptions.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm text-slate-400" htmlFor="piece-filter">
+                Filtrar por pieza
+              </label>
+              <select
+                id="piece-filter"
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
+                value={pieceFilter}
+                onChange={(event) => setPieceFilter(event.target.value)}
+              >
+                <option value="ALL">Todas</option>
+                {pieceOptions.map((piece) => (
+                  <option key={piece} value={piece}>
+                    {piece}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div>
-            <label className="text-sm text-slate-400" htmlFor="year-filter">
-              Filtrar por año
-            </label>
-            <select
-              id="year-filter"
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
-              value={yearFilter}
-              onChange={(event) => {
-                const next = event.target.value;
-                setYearFilter(next);
-                setPieceFilter("ALL");
-              }}
-            >
-              <option value="ALL">Todos</option>
-              {yearOptions.map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm text-slate-400" htmlFor="piece-filter">
-              Filtrar por pieza
-            </label>
-            <select
-              id="piece-filter"
-              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-base text-white outline-none transition focus:border-emerald-400"
-              value={pieceFilter}
-              onChange={(event) => setPieceFilter(event.target.value)}
-            >
-              <option value="ALL">Todas</option>
-              {pieceOptions.map((piece) => (
-                <option key={piece} value={piece}>
-                  {piece}
-                </option>
-              ))}
-            </select>
           </div>
         </section>
 
@@ -397,7 +412,79 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
               No encontramos piezas que coincidan con el filtro aplicado.
             </div>
           ) : (
-            <div className="overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40">
+            <>
+            <div className="grid gap-4 md:hidden">
+              {filteredItems.map((item) => {
+                const pieceName = getPieceName(item);
+                const brand = getBrand(item);
+                const vehicle = getVehicle(item);
+                const yearRange = getYearRange(item);
+                const origin = getOrigin(item);
+                const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
+                const photos = getPhotos(item);
+                const primaryPhoto = photos[0] ?? null;
+                const updatedLabel = (() => {
+                  const parsed = new Date(item.updatedAt);
+                  return Number.isNaN(parsed.getTime()) ? "-" : parsed.toLocaleDateString("es-MX");
+                })();
+                return (
+                  <article key={`${item.id}-mobile`} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-md shadow-black/40">
+                    <div className="flex items-center justify-between text-xs text-slate-400">
+                      <span className="font-mono text-sm text-emerald-200">{item.skuInternal || "-"}</span>
+                      <span>Actualizado {updatedLabel}</span>
+                    </div>
+                    <div className="mt-3 flex gap-3">
+                      <div className="h-20 w-20 flex-shrink-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
+                        {primaryPhoto ? (
+                          <button
+                            type="button"
+                            onClick={() => openPhotoModal(photos, 0, pieceName)}
+                            className="block h-full w-full"
+                          >
+                            <img src={primaryPhoto} alt={pieceName} className="h-full w-full object-cover" loading="lazy" />
+                          </button>
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">Sin foto</div>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-white">{pieceName}</h3>
+                        <p className="text-sm text-slate-400">{brand ?? "-"} · {vehicle ?? "-"}</p>
+                        <p className="text-xs text-slate-500">Años {yearRange ?? "-"}</p>
+                        <p className="text-xs text-slate-500">Origen {origin || "-"}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="text-lg font-bold text-emerald-300">{formatCurrencyMx(item.price)}</span>
+                      <span className="text-sm text-slate-400">Stock: {item.stock}</span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                      {mlUrl && (
+                        <a
+                          href={mlUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center rounded-full border border-emerald-500/60 px-3 py-1 text-emerald-200"
+                        >
+                          Ver en ML
+                        </a>
+                      )}
+                      {photos.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => openPhotoModal(photos, 0, pieceName)}
+                          className="rounded-full border border-slate-700 px-3 py-1"
+                        >
+                          Ver {photos.length} fotos
+                        </button>
+                      )}
+                      {item.sellerCustomField && <span className="rounded-full border border-slate-700 px-3 py-1">{item.sellerCustomField}</span>}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="hidden overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40 md:block">
               <table className="min-w-[1100px] w-full border-collapse text-sm">
                 <thead className="bg-slate-900/60 text-xs font-semibold uppercase tracking-widest text-slate-400">
                   <tr>
@@ -511,6 +598,7 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </section>
       </main>
