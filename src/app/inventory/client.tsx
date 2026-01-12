@@ -64,6 +64,8 @@ type NotificationItem = {
   success: boolean;
 };
 
+type SectionKey = "notifications" | "manual" | "import";
+
 const brandOptions = [
   "ACURA",
   "AUDI",
@@ -311,6 +313,35 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
+  const [isMobile, setIsMobile] = useState(false);
+  const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
+    notifications: true,
+    manual: true,
+    import: true
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof window === "undefined") return;
+      setIsMobile(window.innerWidth < 768);
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (isMobile) {
+      setSectionVisibility({ notifications: false, manual: false, import: false });
+    } else {
+      setSectionVisibility({ notifications: true, manual: true, import: true });
+    }
+  }, [isMobile]);
+
+  const toggleSection = useCallback((section: SectionKey) => {
+    if (!isMobile) return;
+    setSectionVisibility((prev) => ({ ...prev, [section]: !prev[section] }));
+  }, [isMobile]);
 
   const triggerNotificationToast = useCallback((entry: NotificationItem) => {
     setToastNotification(entry);
@@ -1585,20 +1616,20 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
           </div>
         </div>
       )}
-      <main className="min-h-screen px-6 py-8">
-        <div className="max-w-screen-2xl mx-auto space-y-6">
-          <header className="flex flex-col gap-2">
-            <p className="text-sm uppercase tracking-[0.2em] text-amber-400">Inventario</p>
-            <div className="flex items-center justify-between">
+      <main className="min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 sm:py-8">
+        <div className="mx-auto flex max-w-screen-2xl flex-col gap-6">
+          <header className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm sm:p-6">
+            <p className="text-xs uppercase tracking-[0.3em] text-amber-400">Inventario</p>
+            <div className="mt-2 flex flex-col gap-3 sm:mt-3 sm:flex-row sm:items-center sm:justify-between">
               <h1 className="text-2xl font-semibold">Stock y precios</h1>
               <a
                 href="/api/auth/signout"
-                className="text-sm text-slate-200 border border-slate-600 rounded-md px-3 py-1 hover:border-amber-400"
+                className="w-full rounded-md border border-slate-700 px-3 py-2 text-center text-sm text-slate-200 hover:border-amber-400 sm:w-auto"
               >
                 Cerrar sesion
               </a>
             </div>
-            <p className="text-slate-300 text-sm">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
+            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
           </header>
 
         <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
@@ -1607,50 +1638,71 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               <h2 className="text-lg font-semibold">Notificaciones Mercado Libre</h2>
               <p className="text-xs text-slate-400">Sincronizamos cada 20 segundos o cuando hagas clic en actualizar.</p>
             </div>
-            <button
-              type="button"
-              onClick={() => fetchNotifications({ silent: false })}
-              disabled={notificationsLoading}
-              className="px-3 py-2 rounded-md border border-slate-600 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60"
-            >
-              {notificationsLoading ? "Actualizando..." : "Actualizar"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fetchNotifications({ silent: false })}
+                disabled={notificationsLoading}
+                className="rounded-md border border-slate-600 px-3 py-2 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60"
+              >
+                {notificationsLoading ? "Actualizando..." : "Actualizar"}
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSection("notifications")}
+                className="rounded-md border border-transparent px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
+              >
+                {sectionVisibility.notifications ? "Ocultar" : "Mostrar"}
+              </button>
+            </div>
           </div>
-          {notifications.length ? (
-            <ul className="divide-y divide-slate-700 text-sm text-slate-100">
-              {notifications.slice(0, 6).map((entry) => (
-                <li key={entry.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm">{entry.message}</p>
-                    <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
-                  </div>
-                  <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 sm:items-end">
-                    {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
-                    {entry.status && (
-                      <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
-                        {entry.status}
-                      </span>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-slate-400">Sin eventos recientes.</p>
-          )}
+          <div className={isMobile && !sectionVisibility.notifications ? "hidden" : "block"}>
+            {notifications.length ? (
+              <ul className="divide-y divide-slate-700 text-sm text-slate-100">
+                {notifications.slice(0, 6).map((entry) => (
+                  <li key={entry.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm">{entry.message}</p>
+                      <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+                    </div>
+                    <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 sm:items-end">
+                      {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
+                      {entry.status && (
+                        <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
+                          {entry.status}
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-slate-400">Sin eventos recientes.</p>
+            )}
+          </div>
         </section>
 
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-4">
-          <h2 className="text-lg font-semibold">Carga manual</h2>
-          <form
-            className="grid grid-cols-1 sm:grid-cols-3 gap-3"
-            onSubmit={onSubmit}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-              }
-            }}
-          >
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-lg font-semibold">Carga manual</h2>
+            <button
+              type="button"
+              onClick={() => toggleSection("manual")}
+              className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
+            >
+              {sectionVisibility.manual ? "Ocultar" : "Mostrar"}
+            </button>
+          </div>
+          <div className={isMobile && !sectionVisibility.manual ? "hidden" : "block"}>
+            <form
+              className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
+              onSubmit={onSubmit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                }
+              }}
+            >
             <input
               className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
               placeholder="SKU interno *"
@@ -1876,46 +1928,68 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               </button>
               {message && <span className="text-sm text-amber-300">{message}</span>}
             </div>
-          </form>
+            </form>
+          </div>
         </section>
 
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold">Importar Excel</h2>
-            <button
-              type="button"
-              onClick={downloadTemplate}
-              disabled={downloading}
-              className="px-3 py-2 rounded-md border border-slate-600 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60"
-            >
-              {downloading ? "Descargando..." : "Descargar plantilla"}
-            </button>
-          </div>
-          <form className="flex flex-col sm:flex-row gap-3" onSubmit={onUpload}>
-            <input
-              type="file"
-              name="file"
-              accept=".xlsx,.xls,.csv"
-              className="text-sm text-slate-200"
-            />
-            <button
-              type="submit"
-              disabled={uploading}
-              className="px-4 py-2 rounded-md bg-primary text-white font-semibold hover:bg-teal-700 disabled:opacity-60"
-            >
-              {uploading ? "Importando..." : "Importar"}
-            </button>
-          </form>
-          {uploadMessage && <p className="text-sm text-amber-300">{uploadMessage}</p>}
-          {uploadErrors.length > 0 && (
-            <div className="text-xs text-slate-200 space-y-1">
-              {uploadErrors.slice(0, 5).map((err, i) => (
-                <div key={i}>• {err}</div>
-              ))}
-              {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={downloadTemplate}
+                disabled={downloading}
+                className="rounded-md border border-slate-600 px-3 py-2 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60"
+              >
+                {downloading ? "Descargando..." : "Descargar plantilla"}
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleSection("import")}
+                className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
+              >
+                {sectionVisibility.import ? "Ocultar" : "Mostrar"}
+              </button>
             </div>
-          )}
-          <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
+          </div>
+          <div className={isMobile && !sectionVisibility.import ? "hidden" : "space-y-3"}>
+            <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onUpload}>
+              <input
+                type="file"
+                name="file"
+                accept=".xlsx,.xls,.csv"
+                className="text-sm text-slate-200"
+              />
+              <div className="flex gap-3">
+                <button
+                  type="submit"
+                  disabled={uploading}
+                  className="rounded-md bg-primary px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                >
+                  {uploading ? "Importando..." : "Importar"}
+                </button>
+                <button
+                  type="button"
+                  onClick={downloadTemplate}
+                  disabled={downloading}
+                  className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60 sm:hidden"
+                >
+                  {downloading ? "Descargando..." : "Descargar plantilla"}
+                </button>
+              </div>
+            </form>
+            {uploadMessage && <p className="text-sm text-amber-300">{uploadMessage}</p>}
+            {uploadErrors.length > 0 && (
+              <div className="space-y-1 text-xs text-slate-200">
+                {uploadErrors.slice(0, 5).map((err, i) => (
+                  <div key={i}>• {err}</div>
+                ))}
+                {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
+              </div>
+            )}
+            <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
+          </div>
         </section>
 
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
@@ -2037,7 +2111,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
           )}
           <div
             className="ag-theme-quartz rounded-xl border border-slate-700 shadow-inner"
-            style={{ height: 600 }}
+            style={{ height: isMobile ? 520 : 600 }}
           >
             <AgGridReact
               rowData={filteredItems}
