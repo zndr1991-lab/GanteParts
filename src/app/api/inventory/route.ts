@@ -148,7 +148,7 @@ export async function DELETE(req: Request) {
   }
 
   const result = await prisma.inventoryItem.deleteMany({
-    where: { id: { in: ids }, ownerId: session.user.id }
+    where: { id: { in: ids } }
   });
 
   await prisma.auditLog.create({
@@ -192,7 +192,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "Estatus invalido" }, { status: 400 });
   }
 
-  const existing = await prisma.inventoryItem.findFirst({ where: { id, ownerId: session.user.id } });
+  const existing = await prisma.inventoryItem.findFirst({ where: { id } });
   if (!existing) {
     return NextResponse.json({ error: "Item no encontrado" }, { status: 404 });
   }

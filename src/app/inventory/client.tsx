@@ -103,6 +103,8 @@ const brandOptions = [
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
 const MAX_PHOTOS = 8;
+const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
+const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 
 const estatusInternoOptions = [
   "ML",
@@ -546,8 +548,63 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
   const fileToDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve((reader.result as string) || "");
       reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
+      reader.onload = () => {
+        const base64 = (reader.result as string) || "";
+        if (!base64) {
+          resolve("");
+          return;
+        }
+
+        // Comprimir imagen usando canvas en el cliente para reducir el peso
+        try {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              let { width, height } = img;
+              if (!width || !height) {
+                resolve(base64);
+                return;
+              }
+
+              const maxDim = MAX_PHOTO_DIMENSION;
+              if (width <= maxDim && height <= maxDim) {
+                // Imagen ya es razonablemente pequena
+                resolve(base64);
+                return;
+              }
+
+              const scale = Math.min(maxDim / width, maxDim / height);
+              const targetWidth = Math.round(width * scale);
+              const targetHeight = Math.round(height * scale);
+
+              const canvas = document.createElement("canvas");
+              canvas.width = targetWidth;
+              canvas.height = targetHeight;
+              const ctx = canvas.getContext("2d");
+              if (!ctx) {
+                resolve(base64);
+                return;
+              }
+              ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+              const quality = PHOTO_QUALITY;
+              const compressed = canvas.toDataURL("image/jpeg", quality);
+              resolve(compressed || base64);
+            } catch (canvasErr) {
+              console.error("Error al comprimir imagen", canvasErr);
+              resolve(base64);
+            }
+          };
+          img.onerror = () => {
+            resolve(base64);
+          };
+          img.src = base64;
+        } catch (err) {
+          console.error("Error al preparar compresion de imagen", err);
+          resolve(base64);
+        }
+      };
       reader.readAsDataURL(file);
     });
 
