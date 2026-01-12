@@ -94,21 +94,31 @@ export async function POST(req: Request) {
       }
     });
 
-    await prisma.auditLog.create({
-      data: {
-        action: "inventory:create",
-        userId: session.user.id,
-        itemId: item.id,
-        metadata: { skuInternal: data.skuInternal }
-      }
-    });
+    // El fallo al escribir el log nunca debe romper la creacion del item
+    try {
+      await prisma.auditLog.create({
+        data: {
+          action: "inventory:create",
+          userId: session.user.id,
+          itemId: item.id,
+          metadata: { skuInternal: data.skuInternal }
+        }
+      });
+    } catch (logErr) {
+      console.error("Error al crear auditLog de inventario", logErr);
+    }
 
     return NextResponse.json(serializeItem(item), { status: 201 });
   } catch (err: any) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return NextResponse.json({ error: "SKU interno duplicado para este usuario" }, { status: 409 });
     }
-    return NextResponse.json({ error: "Error al crear item" }, { status: 500 });
+
+    console.error("Error al crear item de inventario", err);
+    const code = (err as any)?.code;
+    const message = (err as any)?.message;
+    const errorMessage = code || message ? `Error al crear item (${code ?? "sin codigo"})` : "Error al crear item";
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
 
