@@ -270,7 +270,7 @@ const getStatusBadgeClass = (status?: string | null) => {
   }
 };
 
-export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
+export function InventoryClient({ initialItems, userRole }: { initialItems: Item[]; userRole: string }) {
   const [items, setItems] = useState<Item[]>(initialItems);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -319,6 +319,11 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     manual: true,
     import: true
   });
+  const normalizedRole = (userRole ?? "operator").toLowerCase();
+  const canEditInventory = normalizedRole === "admin";
+  const canCreateManual = canEditInventory || normalizedRole === "operator" || normalizedRole === "uploader";
+  const canImportInventory = canEditInventory;
+  const canManageMercadoLibre = canEditInventory;
 
   useEffect(() => {
     const handleResize = () => {
@@ -455,6 +460,10 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
 
   const requestDeleteAuthorization = useCallback(async (ids: string[]) => {
     if (!ids.length) return;
+    if (!canEditInventory) {
+      setMessage("Tu rol no puede borrar registros");
+      return;
+    }
     const confirmed = window.confirm(
       `Estas por borrar ${ids.length} ${ids.length === 1 ? "registro" : "registros"}. Esta accion no se puede deshacer. ¿Continuar?`
     );
@@ -474,10 +483,14 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       return;
     }
     await deleteItems(ids, trimmed);
-  }, [deleteItems]);
+  }, [canEditInventory, deleteItems]);
 
   const performMlAction = useCallback(
     async (action: "pause" | "activate") => {
+      if (!canManageMercadoLibre) {
+        setMessage("Tu rol no puede sincronizar con Mercado Libre");
+        return;
+      }
       if (!selectedIds.length) {
         setMessage("Selecciona al menos un registro");
         return;
@@ -527,7 +540,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
         setMlAction(null);
       }
     },
-    [items, refresh, selectedIds]
+    [canManageMercadoLibre, items, refresh, selectedIds]
   );
 
   const fileToDataUrl = (file: File) =>
@@ -539,6 +552,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     });
 
   const openPhotoModal = useCallback((itemId: string, title: string, photos: string[]) => {
+    if (!canEditInventory) return;
     setPhotoModal({ id: itemId, title });
     setModalPhotos(photos.slice(0, MAX_PHOTOS));
     setPhotoModalError(null);
@@ -546,7 +560,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     if (modalPhotoInputRef.current) {
       modalPhotoInputRef.current.value = "";
     }
-  }, []);
+  }, [canEditInventory]);
 
   const closePhotoModal = useCallback(() => {
     setPhotoModal(null);
@@ -606,6 +620,10 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
 
   const saveModalPhotos = async () => {
     if (!photoModal) return;
+    if (!canEditInventory) {
+      setPhotoModalError("Tu rol no puede editar fotos");
+      return;
+    }
     setPhotoModalSaving(true);
     setPhotoModalError(null);
     const photosToSave = modalPhotos.slice(0, MAX_PHOTOS);
@@ -652,6 +670,10 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreateManual) {
+      setMessage("Tu rol no puede agregar productos");
+      return;
+    }
     const confirmed = window.confirm("¿Deseas agregar este producto al inventario?");
     if (!confirmed) return;
     setPending(true);
@@ -726,6 +748,10 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
 
   const onUpload = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!canImportInventory) {
+      setUploadMessage("Tu rol no puede importar archivos");
+      return;
+    }
     const fileInput = (e.currentTarget.elements.namedItem("file") as HTMLInputElement) || null;
     const file = fileInput?.files?.[0];
     if (!file) {
@@ -1072,7 +1098,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     }
     return { selectedWithMlCount: withMl, hasSelectedWithoutMl: withoutMl > 0 };
   }, [items, selectedIds]);
-  const mlActionDisabled = selectedWithMlCount === 0 || mlAction !== null;
+  const mlActionDisabled = !canManageMercadoLibre || selectedWithMlCount === 0 || mlAction !== null;
 
   const normalizedSearch = search.trim().toLowerCase();
   const searchFilteredItems = useMemo(() => {
@@ -1206,7 +1232,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     },
     {
       headerName: "Estatus interno",
-      editable: true,
+      editable: canEditInventory,
       cellEditor: "agSelectCellEditor",
       cellEditorParams: {
         values: sortedEstatusInternoOptions
@@ -1222,6 +1248,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
         padding: "0 8px"
       },
       onCellClicked: (p: any) => {
+        if (!canEditInventory) return;
         p.api.startEditingCell({ rowIndex: p.rowIndex, colKey: p.column.getId() });
       },
       valueSetter: (p: any) => {
@@ -1332,7 +1359,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     },
     {
       headerName: "Origen",
-      editable: true,
+      editable: canEditInventory,
       cellEditor: "agSelectCellEditor",
       cellEditorParams: {
         values: sortedOrigenOptions
@@ -1366,7 +1393,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     {
       headerName: "Precio",
       field: "price",
-      editable: true,
+      editable: canEditInventory,
       valueFormatter: (p: any) => formatCurrencyMx(p.value),
       valueSetter: (p: any) => {
         const raw = (p.newValue ?? "").toString();
@@ -1398,7 +1425,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     },
     {
       headerName: "Ubicacion",
-      editable: true,
+      editable: canEditInventory,
       valueGetter: (p: any) => p.data.extraData?.ubicacion ?? "",
       valueSetter: (p: any) => {
         const val = (p.newValue ?? "").toString().toUpperCase();
@@ -1428,7 +1455,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     {
       headerName: "Codigo de Mercado Libre",
       field: "mlItemId",
-      editable: true,
+      editable: canEditInventory,
       valueFormatter: (p: any) => (p.value && p.value.length ? p.value : "-"),
       valueSetter: (p: any) => {
         updateMlItemId(p.data.id, (p.newValue ?? "").toString());
@@ -1438,7 +1465,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     },
     {
       headerName: "Prestado a/Vendido a",
-      editable: true,
+      editable: canEditInventory,
       valueGetter: (p: any) => p.data.extraData?.prestado_vendido_a ?? "",
       valueSetter: (p: any) => {
         const val = (p.newValue ?? "").toString().toUpperCase();
@@ -1533,6 +1560,13 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
       cellRenderer: (p: any) => {
         const photos = sanitizePhotos(p.value);
         const count = photos.length;
+        if (!canEditInventory) {
+          return (
+            <span className="text-xs text-slate-400">
+              {count ? `${count} ${count === 1 ? "foto" : "fotos"}` : "Sin fotos"}
+            </span>
+          );
+        }
         return (
           <button
             type="button"
@@ -1551,15 +1585,20 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     },
     {
       headerName: "Acciones",
-      cellRenderer: (p: any) => (
-        <button
-          type="button"
-          className="text-red-300 hover:text-red-200 text-xs"
-          onClick={() => requestDeleteAuthorization([p.data.id])}
-        >
-          Borrar
-        </button>
-      ),
+      cellRenderer: (p: any) => {
+        if (!canEditInventory) {
+          return <span className="text-xs text-slate-500">-</span>;
+        }
+        return (
+          <button
+            type="button"
+            className="text-red-300 hover:text-red-200 text-xs"
+            onClick={() => requestDeleteAuthorization([p.data.id])}
+          >
+            Borrar
+          </button>
+        );
+      },
       width: 90,
       pinned: "right",
       filter: false,
@@ -1567,6 +1606,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
     }
     ],
     [
+      canEditInventory,
       openPhotoModal,
       requestDeleteAuthorization,
       updateEstatusInterno,
@@ -1685,24 +1725,27 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold">Carga manual</h2>
-            <button
-              type="button"
-              onClick={() => toggleSection("manual")}
-              className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
-            >
-              {sectionVisibility.manual ? "Ocultar" : "Mostrar"}
-            </button>
+            {canCreateManual && (
+              <button
+                type="button"
+                onClick={() => toggleSection("manual")}
+                className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
+              >
+                {sectionVisibility.manual ? "Ocultar" : "Mostrar"}
+              </button>
+            )}
           </div>
           <div className={isMobile && !sectionVisibility.manual ? "hidden" : "block"}>
-            <form
-              className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
-              onSubmit={onSubmit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                }
-              }}
-            >
+            {canCreateManual ? (
+              <form
+                className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
+                onSubmit={onSubmit}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                  }
+                }}
+              >
             <input
               className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
               placeholder="SKU interno *"
@@ -1918,17 +1961,24 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               >
                 {pending ? "Guardando..." : "Guardar"}
               </button>
-              <button
-                type="button"
-                disabled={!selectedIds.length}
-                onClick={() => requestDeleteAuthorization(selectedIds)}
-                className="px-4 py-2 rounded-md border border-red-500 text-red-200 text-sm hover:bg-red-500/20 disabled:opacity-60"
-              >
-                Borrar seleccionados
-              </button>
+              {canEditInventory && (
+                <button
+                  type="button"
+                  disabled={!selectedIds.length}
+                  onClick={() => requestDeleteAuthorization(selectedIds)}
+                  className="px-4 py-2 rounded-md border border-red-500 text-red-200 text-sm hover:bg-red-500/20 disabled:opacity-60"
+                >
+                  Borrar seleccionados
+                </button>
+              )}
               {message && <span className="text-sm text-amber-300">{message}</span>}
             </div>
-            </form>
+              </form>
+            ) : (
+              <p className="text-sm text-slate-400">
+                Tu rol solo permite consultar inventario. Pide a un administrador que te dé acceso de capturista si necesitas agregar productos.
+              </p>
+            )}
           </div>
         </section>
 
@@ -1944,51 +1994,61 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               >
                 {downloading ? "Descargando..." : "Descargar plantilla"}
               </button>
-              <button
-                type="button"
-                onClick={() => toggleSection("import")}
-                className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
-              >
-                {sectionVisibility.import ? "Ocultar" : "Mostrar"}
-              </button>
-            </div>
-          </div>
-          <div className={isMobile && !sectionVisibility.import ? "hidden" : "space-y-3"}>
-            <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onUpload}>
-              <input
-                type="file"
-                name="file"
-                accept=".xlsx,.xls,.csv"
-                className="text-sm text-slate-200"
-              />
-              <div className="flex gap-3">
-                <button
-                  type="submit"
-                  disabled={uploading}
-                  className="rounded-md bg-primary px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
-                >
-                  {uploading ? "Importando..." : "Importar"}
-                </button>
+              {canImportInventory && (
                 <button
                   type="button"
-                  onClick={downloadTemplate}
-                  disabled={downloading}
-                  className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60 sm:hidden"
+                  onClick={() => toggleSection("import")}
+                  className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
                 >
-                  {downloading ? "Descargando..." : "Descargar plantilla"}
+                  {sectionVisibility.import ? "Ocultar" : "Mostrar"}
                 </button>
-              </div>
-            </form>
-            {uploadMessage && <p className="text-sm text-amber-300">{uploadMessage}</p>}
-            {uploadErrors.length > 0 && (
-              <div className="space-y-1 text-xs text-slate-200">
-                {uploadErrors.slice(0, 5).map((err, i) => (
-                  <div key={i}>• {err}</div>
-                ))}
-                {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
-              </div>
+              )}
+            </div>
+          </div>
+          <div className={isMobile && canImportInventory && !sectionVisibility.import ? "hidden" : "space-y-3"}>
+            {canImportInventory ? (
+              <>
+                <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onUpload}>
+                  <input
+                    type="file"
+                    name="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="text-sm text-slate-200"
+                  />
+                  <div className="flex gap-3">
+                    <button
+                      type="submit"
+                      disabled={uploading}
+                      className="rounded-md bg-primary px-4 py-2 font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                    >
+                      {uploading ? "Importando..." : "Importar"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadTemplate}
+                      disabled={downloading}
+                      className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60 sm:hidden"
+                    >
+                      {downloading ? "Descargando..." : "Descargar plantilla"}
+                    </button>
+                  </div>
+                </form>
+                {uploadMessage && <p className="text-sm text-amber-300">{uploadMessage}</p>}
+                {uploadErrors.length > 0 && (
+                  <div className="space-y-1 text-xs text-slate-200">
+                    {uploadErrors.slice(0, 5).map((err, i) => (
+                      <div key={i}>• {err}</div>
+                    ))}
+                    {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
+                  </div>
+                )}
+                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
+              </>
+            ) : (
+              <p className="text-sm text-slate-400">
+                Solo administradores pueden importar archivos. Utiliza la captura manual para dar de alta productos.
+              </p>
             )}
-            <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
           </div>
         </section>
 
@@ -2058,35 +2118,41 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               </p>
             )}
           </div>
-          <div className="flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-1">
-              <p className="text-xs text-slate-400">Acciones Mercado Libre</p>
-              <p className="text-[11px] text-slate-500">
-                {selectedWithMlCount
-                  ? `${selectedWithMlCount} ${selectedWithMlCount === 1 ? "seleccionado" : "seleccionados"} con codigo`
-                  : "Selecciona registros con codigo de Mercado Libre"}
-                {hasSelectedWithoutMl ? " · Algunos seleccionados no tienen codigo" : ""}
-              </p>
+          {canManageMercadoLibre ? (
+            <div className="flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <p className="text-xs text-slate-400">Acciones Mercado Libre</p>
+                <p className="text-[11px] text-slate-500">
+                  {selectedWithMlCount
+                    ? `${selectedWithMlCount} ${selectedWithMlCount === 1 ? "seleccionado" : "seleccionados"} con codigo`
+                    : "Selecciona registros con codigo de Mercado Libre"}
+                  {hasSelectedWithoutMl ? " · Algunos seleccionados no tienen codigo" : ""}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => performMlAction("pause")}
+                  disabled={mlActionDisabled}
+                  className="rounded-md border border-amber-400 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-400/10 disabled:opacity-60"
+                >
+                  {mlAction === "pause" ? "Pausando..." : "Pausar en ML"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => performMlAction("activate")}
+                  disabled={mlActionDisabled}
+                  className="rounded-md border border-teal-400 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-teal-200 hover:bg-teal-400/10 disabled:opacity-60"
+                >
+                  {mlAction === "activate" ? "Activando..." : "Activar en ML"}
+                </button>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => performMlAction("pause")}
-                disabled={mlActionDisabled}
-                className="rounded-md border border-amber-400 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-400/10 disabled:opacity-60"
-              >
-                {mlAction === "pause" ? "Pausando..." : "Pausar en ML"}
-              </button>
-              <button
-                type="button"
-                onClick={() => performMlAction("activate")}
-                disabled={mlActionDisabled}
-                className="rounded-md border border-teal-400 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-teal-200 hover:bg-teal-400/10 disabled:opacity-60"
-              >
-                {mlAction === "activate" ? "Activando..." : "Activar en ML"}
-              </button>
+          ) : (
+            <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-400">
+              Tu rol no puede pausar o activar publicaciones en Mercado Libre.
             </div>
-          </div>
+          )}
           {statusCounters.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
               {statusCounters.map(([label, count]) => {
@@ -2124,6 +2190,7 @@ export function InventoryClient({ initialItems }: { initialItems: Item[] }) {
               rowSelection="multiple"
               rowDeselection={false}
               suppressRowClickSelection
+              readOnlyEdit={!canEditInventory}
               enableCellTextSelection={true}
               enableRangeSelection
               animateRows

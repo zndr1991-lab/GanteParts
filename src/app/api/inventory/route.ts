@@ -9,6 +9,16 @@ import { z } from "zod";
 
 const MAX_PHOTOS = 8;
 
+const canEditInventory = (role?: string | null) => {
+  const normalized = (role ?? "").toLowerCase();
+  return normalized === "admin";
+};
+
+const canCreateInventory = (role?: string | null) => {
+  const normalized = (role ?? "").toLowerCase();
+  return normalized === "admin" || normalized === "operator" || normalized === "uploader";
+};
+
 const payloadSchema = z.object({
   skuInternal: z.string().min(1),
   title: z.string().optional(),
@@ -47,13 +57,19 @@ export async function GET() {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
-  const items = await prisma.inventoryItem.findMany({ where: { ownerId: session.user.id }, orderBy: { updatedAt: "desc" } });
+  const role = (session.user.role ?? "").toLowerCase();
+  const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
+
+  const items = await prisma.inventoryItem.findMany({ where, orderBy: { updatedAt: "desc" } });
   return NextResponse.json(items.map(serializeItem));
 }
 
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!canCreateInventory(session.user.role)) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
 
   const body = await req.json();
   const parsed = payloadSchema.safeParse(body);
@@ -101,6 +117,9 @@ const DELETE_PASSWORD = process.env.INVENTORY_DELETE_PASSWORD ?? process.env.DEL
 export async function DELETE(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!canEditInventory(session.user.role)) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = deleteSchema.safeParse(body);
@@ -136,6 +155,9 @@ export async function DELETE(req: Request) {
 export async function PATCH(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!canEditInventory(session.user.role)) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = updateSchema.safeParse(body);

@@ -67,10 +67,18 @@ const statusMap: Record<string, string> = {
   inactive: "inactive"
 };
 
+const canImportInventory = (role?: string | null) => {
+  const normalized = (role ?? "").toLowerCase();
+  return normalized === "admin";
+};
+
 export async function POST(req: Request) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!canImportInventory(session.user?.role)) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
 
   const form = await req.formData();
   const file = form.get("file");

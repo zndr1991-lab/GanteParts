@@ -12,9 +12,17 @@ const actionSchema = z.object({
   action: z.enum(["pause", "activate"])
 });
 
+const canManageMercadoLibre = (role?: string | null) => {
+  const normalized = (role ?? "").toLowerCase();
+  return normalized === "admin" || normalized === "operator";
+};
+
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  if (!canManageMercadoLibre(session.user.role)) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = actionSchema.safeParse(body);

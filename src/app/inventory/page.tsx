@@ -10,8 +10,11 @@ export default async function InventoryPage() {
     redirect("/login");
   }
 
+  const role = (session.user.role ?? "").toLowerCase();
+  const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
+
   const items = await prisma.inventoryItem.findMany({
-    where: { ownerId: session.user.id },
+    where,
     orderBy: { updatedAt: "desc" }
   });
 
@@ -24,5 +27,5 @@ export default async function InventoryPage() {
     };
   });
 
-  return <InventoryClient initialItems={plainItems} />;
+  return <InventoryClient initialItems={plainItems} userRole={session.user.role ?? "operator"} />;
 }

@@ -7,7 +7,8 @@ import { FormEvent, useState } from "react";
 const roles = [
   { value: "admin", label: "Admin" },
   { value: "operator", label: "Operador" },
-  { value: "viewer", label: "Solo lectura" }
+  { value: "viewer", label: "Solo lectura" },
+  { value: "uploader", label: "Capturista (solo altas)" }
 ];
 
 export default function RegistroPage() {

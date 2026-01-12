@@ -5,11 +5,13 @@ import { hash } from "bcryptjs";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+const allowedRoles = ["admin", "operator", "viewer", "uploader"] as const;
+
 const payloadSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   name: z.string().min(1),
-  role: z.string().default("operator")
+  role: z.enum(allowedRoles).default("operator")
 });
 
 export async function POST(req: Request) {
