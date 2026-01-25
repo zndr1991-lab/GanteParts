@@ -24,7 +24,7 @@ export default function LoginPage() {
       setError("Credenciales invalidas");
       return;
     }
-    window.location.href = "/inventory";
+    window.location.href = "/panel";
   };
 
   return (

@@ -3,6 +3,9 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { InventoryClient } from "./client";
+import { serializeInventoryItem } from "@/lib/inventory-serialization";
+
+const INITIAL_PAGE_SIZE = 100;
 
 export default async function InventoryPage() {
   const session = await auth();
@@ -13,19 +16,21 @@ export default async function InventoryPage() {
   const role = (session.user.role ?? "").toLowerCase();
   const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
 
-  const items = await prisma.inventoryItem.findMany({
-    where,
-    orderBy: { updatedAt: "desc" }
-  });
+  const [items, total] = await Promise.all([
+    prisma.inventoryItem.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      take: INITIAL_PAGE_SIZE
+    }),
+    prisma.inventoryItem.count({ where })
+  ]);
 
-  const plainItems = items.map((item) => {
-    const extraData = typeof item.extraData === "object" && item.extraData !== null ? item.extraData : null;
-    return {
-      ...item,
-      extraData,
-      price: item.price !== null && item.price !== undefined ? Number(item.price) : null
-    };
-  });
+  const plainItems = items.map((item) => serializeInventoryItem(item));
 
-  return <InventoryClient initialItems={plainItems} userRole={session.user.role ?? "operator"} />;
+  return (
+    <InventoryClient
+      initialPage={{ items: plainItems, page: 1, pageSize: INITIAL_PAGE_SIZE, total }}
+      userRole={session.user.role ?? "operator"}
+    />
+  );
 }

@@ -3,7 +3,9 @@
 import { AgGridReact } from "ag-grid-react";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_ITEM_PHOTOS } from "@/lib/inventory-serialization";
 
 type Item = {
   id: string;
@@ -15,6 +17,7 @@ type Item = {
   status: string;
   sellerCustomField: string | null;
   extraData?: Record<string, any> | null;
+  photoCount?: number;
 };
 
 type FocusedInfo = {
@@ -66,6 +69,26 @@ type NotificationItem = {
 
 type SectionKey = "notifications" | "manual" | "import";
 
+type InventoryPageResponse = {
+  items: Item[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages?: number;
+};
+
+type InventoryClientProps = {
+  initialPage: InventoryPageResponse;
+  userRole: string;
+  mode?: "full" | "manual-only";
+};
+
+type PhotoEditorState = {
+  key: string;
+  title: string;
+  dataUrl: string;
+};
+
 const brandOptions = [
   "ACURA",
   "AUDI",
@@ -102,9 +125,56 @@ const brandOptions = [
 
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
-const MAX_PHOTOS = 8;
+const MAX_PHOTOS = MAX_ITEM_PHOTOS;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
+const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
+
+const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string) || "");
+    reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
+    reader.readAsDataURL(file);
+  });
+
+const normalizeDataUrlSize = (dataUrl: string) =>
+  new Promise<string>((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = MAX_PHOTO_DIMENSION;
+        const width = img.width || maxDim;
+        const height = img.height || maxDim;
+        const needsResize = width > maxDim || height > maxDim;
+        const scale = needsResize ? Math.min(maxDim / width, maxDim / height) : 1;
+        const targetWidth = Math.max(1, Math.round(width * scale));
+        const targetHeight = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        resolve(canvas.toDataURL("image/jpeg", PHOTO_QUALITY));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    } catch (err) {
+      console.error("Error al normalizar la imagen", err);
+      resolve(dataUrl);
+    }
+  });
+
+const fileToDataUrl = async (file: File) => {
+  const base64 = await readFileAsDataUrl(file);
+  return normalizeDataUrlSize(base64);
+};
 
 const estatusInternoOptions = [
   "ML",
@@ -272,8 +342,9 @@ const getStatusBadgeClass = (status?: string | null) => {
   }
 };
 
-export function InventoryClient({ initialItems, userRole }: { initialItems: Item[]; userRole: string }) {
-  const [items, setItems] = useState<Item[]>(initialItems);
+export function InventoryClient({ initialPage, userRole, mode = "full" }: InventoryClientProps) {
+  const isManualOnly = mode === "manual-only";
+  const [items, setItems] = useState<Item[]>(initialPage.items);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
@@ -304,18 +375,37 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
   const [gridApi, setGridApi] = useState<any>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const modalPhotoInputRef = useRef<HTMLInputElement | null>(null);
+  const editorCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const photoEditorBaseRef = useRef<string | null>(null);
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
+  const [editedPhotos, setEditedPhotos] = useState<Record<string, string>>({});
+  const [photoEditor, setPhotoEditor] = useState<PhotoEditorState | null>(null);
+  const [photoEditorBusy, setPhotoEditorBusy] = useState(false);
+  const [photoEditorReady, setPhotoEditorReady] = useState(false);
+  const [photoEditorError, setPhotoEditorError] = useState<string | null>(null);
+  const [photoEditorSaving, setPhotoEditorSaving] = useState(false);
+  const [drawingMode, setDrawingMode] = useState(false);
+  const [isDrawingStroke, setIsDrawingStroke] = useState(false);
+  const [drawingColor, setDrawingColor] = useState(drawingColors[0]);
+  const [brushSize, setBrushSize] = useState(4);
+  const [pendingText, setPendingText] = useState<string | null>(null);
   const [photoModal, setPhotoModal] = useState<{ id: string; title: string } | null>(null);
   const [modalPhotos, setModalPhotos] = useState<string[]>([]);
   const [photoModalSaving, setPhotoModalSaving] = useState(false);
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
+  const [photoModalLoading, setPhotoModalLoading] = useState(false);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
   const [isMobile, setIsMobile] = useState(false);
+  const pageSizeRef = useRef(initialPage.pageSize);
+  const [totalItems, setTotalItems] = useState(initialPage.total);
+  const [listLoading, setListLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: true,
     manual: true,
@@ -338,17 +428,21 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
   }, []);
 
   useEffect(() => {
+    if (isManualOnly) {
+      setSectionVisibility({ notifications: false, manual: true, import: false });
+      return;
+    }
     if (isMobile) {
-      setSectionVisibility({ notifications: false, manual: false, import: false });
+      setSectionVisibility({ notifications: false, manual: true, import: false });
     } else {
       setSectionVisibility({ notifications: true, manual: true, import: true });
     }
-  }, [isMobile]);
+  }, [isManualOnly, isMobile]);
 
   const toggleSection = useCallback((section: SectionKey) => {
-    if (!isMobile) return;
+    if (!isMobile || isManualOnly) return;
     setSectionVisibility((prev) => ({ ...prev, [section]: !prev[section] }));
-  }, [isMobile]);
+  }, [isManualOnly, isMobile]);
 
   const triggerNotificationToast = useCallback((entry: NotificationItem) => {
     setToastNotification(entry);
@@ -406,10 +500,13 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
   }, []);
 
   useEffect(() => {
+    if (isManualOnly) {
+      return undefined;
+    }
     fetchNotifications({ silent: true });
     const interval = setInterval(() => fetchNotifications({ silent: true }), 20000);
     return () => clearInterval(interval);
-  }, [fetchNotifications]);
+  }, [fetchNotifications, isManualOnly]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -430,15 +527,75 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
     }
   };
 
+  const fetchPage = useCallback(
+    async (page: number, options?: { append?: boolean }) => {
+      const append = Boolean(options?.append);
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        setListLoading(true);
+      }
+      try {
+        const params = new URLSearchParams({
+          page: page.toString(),
+          pageSize: pageSizeRef.current.toString()
+        });
+        const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "No se pudo obtener el inventario");
+        }
+        const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
+        if (typeof data.pageSize === "number" && data.pageSize > 0) {
+          pageSizeRef.current = data.pageSize;
+        }
+        setTotalItems(typeof data.total === "number" ? data.total : incoming.length);
+        setItems((current) => {
+          if (!append) {
+            return incoming;
+          }
+          const existingIds = new Set(current.map((item) => item.id));
+          const merged = [...current];
+          incoming.forEach((item) => {
+            if (!existingIds.has(item.id)) {
+              merged.push(item);
+              existingIds.add(item.id);
+            }
+          });
+          return merged;
+        });
+        if (!append) {
+          setSelectedIds([]);
+          setFocusedRowInfo(null);
+        }
+        return true;
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo obtener el inventario");
+        return false;
+      } finally {
+        if (append) {
+          setLoadingMore(false);
+        } else {
+          setListLoading(false);
+        }
+      }
+    },
+    [setMessage]
+  );
+
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/inventory");
-    if (res.ok) {
-      const data = await res.json();
-      setItems(data);
-      setSelectedIds([]);
-      setFocusedRowInfo(null);
-    }
-  }, []);
+    if (isManualOnly) return;
+    await fetchPage(1);
+  }, [fetchPage, isManualOnly]);
+
+  const hasMoreItems = items.length < totalItems;
+
+  const loadMore = useCallback(async () => {
+    if (!hasMoreItems || loadingMore) return;
+    const pageSize = pageSizeRef.current || 1;
+    const nextPage = Math.floor(items.length / pageSize) + 1;
+    await fetchPage(nextPage, { append: true });
+  }, [fetchPage, hasMoreItems, items.length, loadingMore]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -545,85 +702,349 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
     [canManageMercadoLibre, items, refresh, selectedIds]
   );
 
-  const fileToDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
-      reader.onload = () => {
-        const base64 = (reader.result as string) || "";
-        if (!base64) {
-          resolve("");
-          return;
+  const updateEditedPhotosForFiles = useCallback((nextFiles: File[]) => {
+    setEditedPhotos((prev) => {
+      if (!Object.keys(prev).length) return prev;
+      const allowed = new Set(nextFiles.map((file) => makePhotoKey(file)));
+      let changed = false;
+      const filtered: Record<string, string> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (allowed.has(key)) {
+          filtered[key] = value;
+        } else {
+          changed = true;
         }
-
-        // Comprimir imagen usando canvas en el cliente para reducir el peso
-        try {
-          const img = new Image();
-          img.onload = () => {
-            try {
-              let { width, height } = img;
-              if (!width || !height) {
-                resolve(base64);
-                return;
-              }
-
-              const maxDim = MAX_PHOTO_DIMENSION;
-              if (width <= maxDim && height <= maxDim) {
-                // Imagen ya es razonablemente pequena
-                resolve(base64);
-                return;
-              }
-
-              const scale = Math.min(maxDim / width, maxDim / height);
-              const targetWidth = Math.round(width * scale);
-              const targetHeight = Math.round(height * scale);
-
-              const canvas = document.createElement("canvas");
-              canvas.width = targetWidth;
-              canvas.height = targetHeight;
-              const ctx = canvas.getContext("2d");
-              if (!ctx) {
-                resolve(base64);
-                return;
-              }
-              ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-
-              const quality = PHOTO_QUALITY;
-              const compressed = canvas.toDataURL("image/jpeg", quality);
-              resolve(compressed || base64);
-            } catch (canvasErr) {
-              console.error("Error al comprimir imagen", canvasErr);
-              resolve(base64);
-            }
-          };
-          img.onerror = () => {
-            resolve(base64);
-          };
-          img.src = base64;
-        } catch (err) {
-          console.error("Error al preparar compresion de imagen", err);
-          resolve(base64);
-        }
-      };
-      reader.readAsDataURL(file);
+      });
+      return changed ? filtered : prev;
     });
+  }, []);
 
-  const openPhotoModal = useCallback((itemId: string, title: string, photos: string[]) => {
-    if (!canEditInventory) return;
-    setPhotoModal({ id: itemId, title });
-    setModalPhotos(photos.slice(0, MAX_PHOTOS));
-    setPhotoModalError(null);
-    setModalActiveIndex(0);
-    if (modalPhotoInputRef.current) {
-      modalPhotoInputRef.current.value = "";
+  const mergeManualPhotoFiles = useCallback(
+    (incoming: File[]) => {
+      if (!incoming.length) return;
+      setPhotoFiles((prev) => {
+        const seen = new Set<string>();
+        const combined = [...prev, ...incoming];
+        const unique: File[] = [];
+        combined.forEach((file) => {
+          const key = makePhotoKey(file);
+          if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(file);
+          }
+        });
+        if (unique.length > MAX_PHOTOS) {
+          setMessage(`Maximo ${MAX_PHOTOS} fotos por producto`);
+        }
+        const capped = unique.slice(0, MAX_PHOTOS);
+        updateEditedPhotosForFiles(capped);
+        return capped;
+      });
+    },
+    [setMessage, updateEditedPhotosForFiles]
+  );
+
+  const handleManualPhotoFiles = useCallback(
+    (fileList: FileList | null) => {
+      if (!fileList?.length) return;
+      mergeManualPhotoFiles(Array.from(fileList));
+    },
+    [mergeManualPhotoFiles]
+  );
+
+  const removeManualPhoto = useCallback(
+    (index: number) => {
+      setPhotoFiles((prev) => {
+        const next = prev.filter((_, idx) => idx !== index);
+        updateEditedPhotosForFiles(next);
+        return next;
+      });
+    },
+    [updateEditedPhotosForFiles]
+  );
+
+  const clearManualPhotos = useCallback(() => {
+    setPhotoFiles([]);
+    setEditedPhotos({});
+    if (photoInputRef.current) {
+      photoInputRef.current.value = "";
     }
-  }, [canEditInventory]);
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = "";
+    }
+  }, []);
+
+  const drawDataUrlOnCanvas = useCallback((dataUrl: string) => {
+    const canvas = editorCanvasRef.current;
+    if (!canvas) return;
+    setPhotoEditorBusy(true);
+    setPhotoEditorError(null);
+    setPhotoEditorReady(false);
+    setIsDrawingStroke(false);
+    setPendingText(null);
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = MAX_PHOTO_DIMENSION;
+      const width = img.width || maxDim;
+      const height = img.height || maxDim;
+      const scale = width > maxDim || height > maxDim ? Math.min(maxDim / width, maxDim / height) : 1;
+      const targetWidth = Math.max(1, Math.round(width * scale));
+      const targetHeight = Math.max(1, Math.round(height * scale));
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        setPhotoEditorError("No se pudo preparar el lienzo");
+        setPhotoEditorBusy(false);
+        return;
+      }
+      ctx.clearRect(0, 0, targetWidth, targetHeight);
+      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+      setPhotoEditorBusy(false);
+      setPhotoEditorReady(true);
+    };
+    img.onerror = () => {
+      setPhotoEditorError("No se pudo cargar la imagen");
+      setPhotoEditorBusy(false);
+    };
+    img.src = dataUrl;
+  }, []);
+
+  useEffect(() => {
+    if (!photoEditor) {
+      setPhotoEditorReady(false);
+      return;
+    }
+    drawDataUrlOnCanvas(photoEditor.dataUrl);
+  }, [photoEditor, drawDataUrlOnCanvas]);
+
+  const openPhotoEditorForFile = useCallback(
+    async (file: File) => {
+      try {
+        const key = makePhotoKey(file);
+        const baseData = editedPhotos[key] ?? (await readFileAsDataUrl(file));
+        const normalized = await normalizeDataUrlSize(baseData);
+        photoEditorBaseRef.current = normalized;
+        setPhotoEditor({ key, title: file.name, dataUrl: normalized });
+        setDrawingMode(false);
+        setBrushSize(4);
+        setDrawingColor(drawingColors[0]);
+        setPendingText(null);
+        setPhotoEditorError(null);
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo abrir el editor de fotos");
+      }
+    },
+    [editedPhotos, setMessage]
+  );
+
+  const closePhotoEditor = useCallback(() => {
+    setPhotoEditor(null);
+    setPhotoEditorError(null);
+    setDrawingMode(false);
+    setPendingText(null);
+    setIsDrawingStroke(false);
+    setPhotoEditorReady(false);
+    photoEditorBaseRef.current = null;
+  }, []);
+
+  const resetEditorCanvas = useCallback(() => {
+    if (!photoEditor) return;
+    const base = photoEditorBaseRef.current ?? photoEditor.dataUrl;
+    drawDataUrlOnCanvas(base);
+    setDrawingMode(false);
+  }, [photoEditor, drawDataUrlOnCanvas]);
+
+  const rotateEditorCanvas = useCallback(
+    (direction: "left" | "right") => {
+      if (!photoEditorReady || !editorCanvasRef.current) return;
+      const canvas = editorCanvasRef.current;
+      const snapshot = document.createElement("canvas");
+      snapshot.width = canvas.width;
+      snapshot.height = canvas.height;
+      const snapshotCtx = snapshot.getContext("2d");
+      if (!snapshotCtx) return;
+      snapshotCtx.drawImage(canvas, 0, 0);
+      const newWidth = snapshot.height;
+      const newHeight = snapshot.width;
+      canvas.width = newWidth;
+      canvas.height = newHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.save();
+      ctx.clearRect(0, 0, newWidth, newHeight);
+      if (direction === "left") {
+        ctx.translate(0, newHeight);
+        ctx.rotate(-Math.PI / 2);
+      } else {
+        ctx.translate(newWidth, 0);
+        ctx.rotate(Math.PI / 2);
+      }
+      ctx.drawImage(snapshot, 0, 0);
+      ctx.restore();
+    },
+    [photoEditorReady]
+  );
+
+  const flipEditorCanvas = useCallback(
+    (axis: "horizontal" | "vertical") => {
+      if (!photoEditorReady || !editorCanvasRef.current) return;
+      const canvas = editorCanvasRef.current;
+      const snapshot = document.createElement("canvas");
+      snapshot.width = canvas.width;
+      snapshot.height = canvas.height;
+      const snapshotCtx = snapshot.getContext("2d");
+      if (!snapshotCtx) return;
+      snapshotCtx.drawImage(canvas, 0, 0);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (axis === "horizontal") {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      } else {
+        ctx.translate(0, canvas.height);
+        ctx.scale(1, -1);
+      }
+      ctx.drawImage(snapshot, 0, 0);
+      ctx.restore();
+    },
+    [photoEditorReady]
+  );
+
+  const getCanvasPoint = (evt: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = editorCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const x = ((evt.clientX - rect.left) / rect.width) * canvas.width;
+    const y = ((evt.clientY - rect.top) / rect.height) * canvas.height;
+    return { x, y };
+  };
+
+  const handleEditorPointerDown = useCallback(
+    (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!photoEditorReady || !editorCanvasRef.current) return;
+      const canvas = editorCanvasRef.current;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      if (pendingText) {
+        evt.preventDefault();
+        const { x, y } = getCanvasPoint(evt);
+        ctx.fillStyle = drawingColor;
+        ctx.font = `${Math.max(18, Math.round(canvas.width * 0.04))}px 'Inter', 'Segoe UI', sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(pendingText, x, y);
+        setPendingText(null);
+        return;
+      }
+      if (!drawingMode) return;
+      evt.preventDefault();
+      const { x, y } = getCanvasPoint(evt);
+      ctx.strokeStyle = drawingColor;
+      ctx.lineWidth = brushSize;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      setIsDrawingStroke(true);
+      canvas.setPointerCapture?.(evt.pointerId);
+    },
+    [brushSize, drawingColor, drawingMode, pendingText, photoEditorReady]
+  );
+
+  const handleEditorPointerMove = useCallback(
+    (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!drawingMode || !isDrawingStroke || !editorCanvasRef.current) return;
+      evt.preventDefault();
+      const canvas = editorCanvasRef.current;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const { x, y } = getCanvasPoint(evt);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    },
+    [drawingMode, isDrawingStroke]
+  );
+
+  const handleEditorPointerUp = useCallback(
+    (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!editorCanvasRef.current) return;
+      const canvas = editorCanvasRef.current;
+      const ctx = canvas.getContext("2d");
+      if (drawingMode && isDrawingStroke && ctx) {
+        evt.preventDefault();
+        ctx.closePath();
+      }
+      canvas.releasePointerCapture?.(evt.pointerId);
+      setIsDrawingStroke(false);
+    },
+    [drawingMode, isDrawingStroke]
+  );
+
+  const handleAddText = useCallback(() => {
+    if (!photoEditorReady) return;
+    const text = window.prompt("Texto a agregar");
+    if (!text) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setPendingText(trimmed);
+  }, [photoEditorReady]);
+
+  const handleSaveEditedPhoto = useCallback(async () => {
+    if (!photoEditor || !editorCanvasRef.current) return;
+    try {
+      setPhotoEditorSaving(true);
+      const dataUrl = editorCanvasRef.current.toDataURL("image/jpeg", PHOTO_QUALITY);
+      const normalized = await normalizeDataUrlSize(dataUrl);
+      setEditedPhotos((prev) => ({ ...prev, [photoEditor.key]: normalized }));
+      setPhotoEditor(null);
+      photoEditorBaseRef.current = null;
+      setDrawingMode(false);
+      setPendingText(null);
+      setIsDrawingStroke(false);
+    } catch (err: any) {
+      setPhotoEditorError(err?.message || "No se pudo guardar la foto editada");
+    } finally {
+      setPhotoEditorSaving(false);
+    }
+  }, [photoEditor]);
+
+  const openPhotoModal = useCallback(
+    async (item: Item) => {
+      if (!canEditInventory) return;
+      setPhotoModal({ id: item.id, title: item.skuInternal || "Item" });
+      setModalPhotos([]);
+      setPhotoModalError(null);
+      setModalActiveIndex(0);
+      setPhotoModalLoading(true);
+      if (modalPhotoInputRef.current) {
+        modalPhotoInputRef.current.value = "";
+      }
+      try {
+        const res = await fetch(`/api/inventory/${item.id}/photos`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "No se pudieron obtener las fotos");
+        }
+        const existing = sanitizePhotos(data.photos);
+        setModalPhotos(existing);
+      } catch (err: any) {
+        setPhotoModalError(err?.message || "No se pudieron obtener las fotos");
+      } finally {
+        setPhotoModalLoading(false);
+      }
+    },
+    [canEditInventory]
+  );
 
   const closePhotoModal = useCallback(() => {
     setPhotoModal(null);
     setModalPhotos([]);
     setPhotoModalError(null);
     setModalActiveIndex(0);
+    setPhotoModalLoading(false);
     if (modalPhotoInputRef.current) {
       modalPhotoInputRef.current.value = "";
     }
@@ -695,16 +1116,9 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
         throw new Error(data.error || "No se pudieron actualizar las fotos");
       }
       setItems((curr) =>
-        curr.map((item) => {
-          if (item.id !== photoModal.id) return item;
-          const nextExtra = { ...(item.extraData ?? {}) } as Record<string, any>;
-          if (photosToSave.length) {
-            nextExtra.photos = photosToSave;
-          } else {
-            delete nextExtra.photos;
-          }
-          return { ...item, extraData: nextExtra };
-        })
+        curr.map((item) =>
+          item.id === photoModal.id ? { ...item, photoCount: photosToSave.length } : item
+        )
       );
       closePhotoModal();
       setMessage("Fotos actualizadas");
@@ -739,9 +1153,13 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
       const anoDesdeSafe = Number.isFinite(anoDesdeNumber as number) ? anoDesdeNumber : undefined;
       const anoHastaSafe = Number.isFinite(anoHastaNumber as number) ? anoHastaNumber : undefined;
 
-      const photosPayload = photoFiles.length
-        ? await Promise.all(photoFiles.slice(0, MAX_PHOTOS).map((file) => fileToDataUrl(file)))
-        : [];
+      const photosPayload = await Promise.all(
+        photoFiles.slice(0, MAX_PHOTOS).map(async (file) => {
+          const edited = editedPhotos[makePhotoKey(file)];
+          if (edited) return edited;
+          return fileToDataUrl(file);
+        })
+      );
 
       const extraDataPayload: Record<string, any> = {
         estatus_interno: toUpper(form.estatusInterno),
@@ -790,10 +1208,7 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
         precioCompra: "",
         ubicacion: ""
       });
-      setPhotoFiles([]);
-      if (photoInputRef.current) {
-        photoInputRef.current.value = "";
-      }
+      clearManualPhotos();
       setMessage("Item creado");
       await refresh();
     } catch (err: any) {
@@ -1613,10 +2028,9 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
     },
     {
       headerName: "Fotos",
-      valueGetter: (p: any) => sanitizePhotos(p.data.extraData?.photos),
+      valueGetter: (p: any) => (typeof p.data.photoCount === "number" ? p.data.photoCount : 0),
       cellRenderer: (p: any) => {
-        const photos = sanitizePhotos(p.value);
-        const count = photos.length;
+        const count = typeof p.value === "number" ? p.value : 0;
         if (!canEditInventory) {
           return (
             <span className="text-xs text-slate-400">
@@ -1628,9 +2042,7 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
           <button
             type="button"
             className="text-xs text-teal-300 hover:text-teal-200 underline underline-offset-2"
-            onClick={() =>
-              openPhotoModal(p.data.id, p.data.skuInternal || "Item", photos)
-            }
+            onClick={() => openPhotoModal(p.data)}
           >
             {count ? `Ver/editar (${count})` : "Agregar fotos"}
           </button>
@@ -1677,7 +2089,7 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
 
   return (
     <>
-      {toastNotification && (
+      {!isManualOnly && toastNotification && (
         <div className="fixed right-4 top-4 z-50 w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900/95 p-4 shadow-2xl backdrop-blur">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1719,17 +2131,27 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
             <p className="text-xs uppercase tracking-[0.3em] text-amber-400">Inventario</p>
             <div className="mt-2 flex flex-col gap-3 sm:mt-3 sm:flex-row sm:items-center sm:justify-between">
               <h1 className="text-2xl font-semibold">Stock y precios</h1>
-              <a
-                href="/api/auth/signout"
-                className="w-full rounded-md border border-slate-700 px-3 py-2 text-center text-sm text-slate-200 hover:border-amber-400 sm:w-auto"
-              >
-                Cerrar sesion
-              </a>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                {isManualOnly && (
+                  <Link
+                    href="/panel"
+                    className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
+                  >
+                    Volver al menú
+                  </Link>
+                )}
+                <a
+                  href="/api/auth/signout"
+                  className="rounded-md border border-slate-700 px-3 py-2 text-center text-sm text-slate-200 hover:border-amber-400"
+                >
+                  Cerrar sesion
+                </a>
+              </div>
             </div>
             <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA.</p>
           </header>
-
-        <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
+  {!isManualOnly && (
+  <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Notificaciones Mercado Libre</h2>
@@ -1778,31 +2200,39 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
             )}
           </div>
         </section>
+        )}
 
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-semibold">Carga manual</h2>
-            {canCreateManual && (
-              <button
-                type="button"
-                onClick={() => toggleSection("manual")}
-                className="rounded-md border border-transparent px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold">Carga manual</h2>
+              <p className="text-xs text-slate-400">
+                {isManualOnly
+                  ? "Completa el formulario para dar de alta una pieza sin cargar todo el inventario."
+                  : "Abrimos la captura manual en una página aparte para no descargar todo el catálogo cada vez."}
+              </p>
+            </div>
+            {!isManualOnly && canCreateManual && (
+              <Link
+                href="/inventory/manual"
+                className="hidden rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20 md:inline-flex"
               >
-                {sectionVisibility.manual ? "Ocultar" : "Mostrar"}
-              </button>
+                Abrir captura manual
+              </Link>
             )}
           </div>
-          <div className={isMobile && !sectionVisibility.manual ? "hidden" : "block"}>
-            {canCreateManual ? (
-              <form
-                className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
-                onSubmit={onSubmit}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                  }
-                }}
-              >
+          <div className={isManualOnly ? "block" : isMobile && !sectionVisibility.manual ? "hidden" : "block"}>
+            {isManualOnly ? (
+              canCreateManual ? (
+                <form
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
+                  onSubmit={onSubmit}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                    }
+                  }}
+                >
             <input
               className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
               placeholder="SKU interno *"
@@ -1900,7 +2330,7 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
               value={form.ubicacion}
               onChange={(e) => setForm((f) => ({ ...f, ubicacion: e.target.value.toUpperCase() }))}
             />
-            <div className="sm:col-span-3 space-y-2">
+            <div className="sm:col-span-3 space-y-3">
               <div className="flex items-center justify-between text-xs text-slate-400">
                 <span>Fotos (hasta {MAX_PHOTOS} imagenes)</span>
                 <span>
@@ -1911,70 +2341,93 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
                 ref={photoInputRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 multiple
-                className="w-full rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-slate-700 file:px-3 file:py-1 file:text-xs file:uppercase file:tracking-widest"
+                className="hidden"
                 onChange={(e) => {
-                  const files = e.target.files ? Array.from(e.target.files) : [];
-                  if (!files.length) return;
-                  setPhotoFiles((prev) => {
-                    const combined = [...prev, ...files];
-                    const unique: File[] = [];
-                    combined.forEach((file) => {
-                      if (
-                        !unique.some(
-                          (existing) =>
-                            existing.name === file.name &&
-                            existing.size === file.size &&
-                            existing.lastModified === file.lastModified
-                        )
-                      ) {
-                        unique.push(file);
-                      }
-                    });
-                    if (unique.length > MAX_PHOTOS) {
-                      setMessage(`Maximo ${MAX_PHOTOS} fotos por producto`);
-                    }
-                    return unique.slice(0, MAX_PHOTOS);
-                  });
+                  handleManualPhotoFiles(e.target.files);
                   e.currentTarget.value = "";
                 }}
               />
-              {photoFiles.length > 0 && (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {photoFiles.map((file, index) => (
-                      <div
-                        key={`${file.name}-${file.lastModified}-${index}`}
-                        className="rounded-lg border border-slate-700 bg-slate-900/70 p-2 text-xs text-slate-200"
-                      >
-                        <p className="truncate" title={file.name}>
-                          {file.name}
-                        </p>
-                        <button
-                          type="button"
-                          className="mt-2 text-[11px] text-amber-300 hover:text-amber-200"
-                          onClick={() =>
-                            setPhotoFiles((prev) => prev.filter((_, idx) => idx !== index))
-                          }
-                        >
-                          Quitar
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  handleManualPhotoFiles(e.target.files);
+                  e.currentTarget.value = "";
+                }}
+              />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-600 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-100 hover:bg-slate-700"
+                  onClick={() => photoInputRef.current?.click()}
+                >
+                  Elegir de galeria
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
+                  onClick={() => cameraInputRef.current?.click()}
+                >
+                  Tomar foto
+                </button>
+                {photoFiles.length > 0 && (
                   <button
                     type="button"
-                    className="text-xs text-slate-300 underline underline-offset-2"
-                    onClick={() => {
-                      setPhotoFiles([]);
-                      if (photoInputRef.current) {
-                        photoInputRef.current.value = "";
-                      }
-                    }}
+                    className="rounded-md border border-slate-600/60 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-300 hover:text-white"
+                    onClick={clearManualPhotos}
                   >
                     Limpiar todas
                   </button>
+                )}
+              </div>
+              <p className="text-xs text-slate-400">
+                Puedes elegir imagenes de tu galeria o abrir directamente la camara. Luego edita, gira o agrega
+                notas antes de enviar la pieza.
+              </p>
+              {photoFiles.length > 0 && (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {photoFiles.map((file, index) => {
+                      const key = makePhotoKey(file);
+                      const isEdited = Boolean(editedPhotos[key]);
+                      return (
+                        <div
+                          key={`${file.name}-${file.lastModified}-${index}`}
+                          className="rounded-lg border border-slate-700 bg-slate-900/70 p-2 text-xs text-slate-200"
+                        >
+                          <p className="truncate" title={file.name}>
+                            {file.name}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {isEdited && (
+                              <span className="rounded-full border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
+                                Editada
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className="text-[11px] text-amber-300 hover:text-amber-200"
+                              onClick={() => openPhotoEditorForFile(file)}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              className="text-[11px] text-rose-300 hover:text-rose-200"
+                              onClick={() => removeManualPhoto(index)}
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -2019,19 +2472,26 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
               >
                 {pending ? "Guardando..." : "Guardar"}
               </button>
-              {canEditInventory && (
-                <button
-                  type="button"
-                  disabled={!selectedIds.length}
-                  onClick={() => requestDeleteAuthorization(selectedIds)}
-                  className="px-4 py-2 rounded-md border border-red-500 text-red-200 text-sm hover:bg-red-500/20 disabled:opacity-60"
-                >
-                  Borrar seleccionados
-                </button>
-              )}
               {message && <span className="text-sm text-amber-300">{message}</span>}
             </div>
-              </form>
+                </form>
+              ) : (
+                <p className="text-sm text-slate-400">
+                  Tu rol solo permite consultar inventario. Pide a un administrador que te dé acceso de capturista si necesitas agregar productos.
+                </p>
+              )
+            ) : canCreateManual ? (
+              <div className="space-y-3 text-sm text-slate-300">
+                <p>
+                  Para capturar una pieza sin esperar a que cargue todo el inventario, usa la nueva vista dedicada. Puedes abrirla sin cerrar esta pestaña.
+                </p>
+                <Link
+                  href="/inventory/manual"
+                  className="inline-flex rounded-md border border-amber-400/40 bg-amber-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20 md:hidden"
+                >
+                  Abrir captura manual
+                </Link>
+              </div>
             ) : (
               <p className="text-sm text-slate-400">
                 Tu rol solo permite consultar inventario. Pide a un administrador que te dé acceso de capturista si necesitas agregar productos.
@@ -2040,7 +2500,9 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
           </div>
         </section>
 
-        <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
+  {!isManualOnly && (
+  <>
+  <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold">Importar Excel</h2>
             <div className="flex flex-wrap items-center gap-2">
@@ -2233,6 +2695,12 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
               })}
             </div>
           )}
+          <p className="text-xs text-slate-400">
+            Mostrando {items.length} de {totalItems} registros
+          </p>
+          {listLoading && (
+            <p className="text-xs text-amber-300">Actualizando inventario...</p>
+          )}
           <div
             className="ag-theme-quartz rounded-xl border border-slate-700 shadow-inner"
             style={{ height: isMobile ? 520 : 600 }}
@@ -2261,9 +2729,178 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
               rowClassRules={rowClassRules}
             />
           </div>
+          {hasMoreItems && (
+            <div className="flex justify-center pt-4">
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={loadingMore || listLoading}
+                className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
+              >
+                {loadingMore ? "Cargando..." : "Cargar más"}
+              </button>
+            </div>
+          )}
         </section>
+        </>
+        )}
       </div>
       </main>
+      {photoEditor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+          <div className="w-full max-w-4xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-100">Editar foto</h3>
+                <p className="text-xs text-slate-400">{photoEditor.title}</p>
+              </div>
+              <button
+                type="button"
+                className="text-sm text-slate-400 hover:text-amber-300"
+                onClick={closePhotoEditor}
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="mt-4 rounded-2xl border border-slate-700 bg-slate-950/70 p-3">
+              <canvas
+                ref={editorCanvasRef}
+                className="h-[320px] w-full touch-none rounded-lg border border-slate-800 bg-black"
+                onPointerDown={handleEditorPointerDown}
+                onPointerMove={handleEditorPointerMove}
+                onPointerUp={handleEditorPointerUp}
+                onPointerLeave={handleEditorPointerUp}
+                onPointerCancel={handleEditorPointerUp}
+              />
+              {(!photoEditorReady || photoEditorBusy) && (
+                <p className="mt-2 text-xs text-slate-400">Preparando imagen...</p>
+              )}
+            </div>
+            {photoEditorError && <p className="mt-3 text-sm text-rose-300">{photoEditorError}</p>}
+            <p className="mt-2 text-xs text-slate-400">
+              {pendingText
+                ? "Toca la imagen para colocar el texto."
+                : drawingMode
+                ? "Arrastra con el dedo o el mouse para dibujar."
+                : "Activa el modo dibujo o agrega texto para resaltar detalles."}
+            </p>
+            <div className="mt-4 space-y-4 text-sm">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  onClick={() => rotateEditorCanvas("left")}
+                  disabled={!photoEditorReady}
+                >
+                  Rotar -90°
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  onClick={() => rotateEditorCanvas("right")}
+                  disabled={!photoEditorReady}
+                >
+                  Rotar +90°
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  onClick={() => flipEditorCanvas("horizontal")}
+                  disabled={!photoEditorReady}
+                >
+                  Voltear horizontal
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  onClick={() => flipEditorCanvas("vertical")}
+                  disabled={!photoEditorReady}
+                >
+                  Voltear vertical
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  type="button"
+                  className={`rounded-md border px-3 py-1.5 font-semibold uppercase tracking-wide ${
+                    drawingMode
+                      ? "border-emerald-400 bg-emerald-500/10 text-emerald-100"
+                      : "border-slate-600 text-slate-300 hover:border-emerald-300"
+                  }`}
+                  onClick={() => setDrawingMode((value) => !value)}
+                  disabled={!photoEditorReady}
+                >
+                  {drawingMode ? "Salir de dibujo" : "Modo dibujo"}
+                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Color:</span>
+                  {drawingColors.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className={`h-6 w-6 rounded-full border ${
+                        drawingColor === color ? "border-white" : "border-transparent"
+                      }`}
+                      style={{ backgroundColor: color }}
+                      onClick={() => setDrawingColor(color)}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Grosor:</span>
+                  {[3, 5, 7].map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      className={`rounded-md border px-2 py-1 ${
+                        brushSize === size
+                          ? "border-amber-400 bg-amber-500/10 text-amber-100"
+                          : "border-slate-600 text-slate-300"
+                      }`}
+                      onClick={() => setBrushSize(size)}
+                    >
+                      {size}px
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-600 px-3 py-1.5 font-semibold uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  onClick={handleAddText}
+                  disabled={!photoEditorReady}
+                >
+                  Agregar texto
+                </button>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-300 hover:border-amber-300 disabled:opacity-50"
+                onClick={resetEditorCanvas}
+                disabled={!photoEditorReady}
+              >
+                Reiniciar
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-slate-600 px-4 py-2 text-xs text-slate-200 hover:border-amber-300"
+                onClick={closePhotoEditor}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                onClick={handleSaveEditedPhoto}
+                disabled={!photoEditorReady || photoEditorSaving}
+              >
+                {photoEditorSaving ? "Guardando..." : "Guardar cambios"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {photoModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-5xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl space-y-5">
@@ -2288,7 +2925,9 @@ export function InventoryClient({ initialItems, userRole }: { initialItems: Item
               </div>
               <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[2fr,1fr]">
                 <div className="space-y-3">
-                  {modalPhotos.length ? (
+                  {photoModalLoading ? (
+                    <p className="text-xs text-slate-300">Cargando fotos...</p>
+                  ) : modalPhotos.length ? (
                     <>
                       <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-800">
                         <img

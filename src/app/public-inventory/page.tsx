@@ -1,40 +1,11 @@
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
-import { prisma } from "@/lib/prisma";
+import { getPublicInventoryPage } from "@/lib/public-inventory";
 import { PublicInventoryClient } from "./client";
 
-function serializeExtra(data: unknown) {
-  if (typeof data === "object" && data !== null) {
-    return data as Record<string, unknown>;
-  }
-  return null;
-}
+const INITIAL_PAGE_SIZE = 48;
 
 export default async function PublicInventoryPage() {
-  const items = await prisma.inventoryItem.findMany({
-    where: {
-      status: "active"
-    },
-    orderBy: { updatedAt: "desc" },
-    select: {
-      id: true,
-      skuInternal: true,
-      title: true,
-      price: true,
-      stock: true,
-      mlItemId: true,
-      sellerCustomField: true,
-      extraData: true,
-      updatedAt: true
-    }
-  });
-
-  const plainItems = items.map((item) => ({
-    ...item,
-    price: item.price !== null && item.price !== undefined ? Number(item.price) : null,
-    extraData: serializeExtra(item.extraData),
-    updatedAt: item.updatedAt.toISOString()
-  }));
-
-  return <PublicInventoryClient items={plainItems} />;
+  const initialPage = await getPublicInventoryPage(1, INITIAL_PAGE_SIZE);
+  return <PublicInventoryClient initialPage={initialPage} />;
 }

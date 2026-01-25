@@ -2,16 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type PublicInventoryItem = {
-  id: string;
-  skuInternal: string;
-  title: string | null;
-  price: number | null;
-  stock: number;
-  mlItemId: string | null;
-  sellerCustomField: string | null;
-  updatedAt: string;
-  extraData: Record<string, unknown> | null;
+import type { PublicInventoryListItem, PublicInventoryPaginatedResult } from "@/lib/public-inventory";
+
+type PhotoModalState = {
+  itemId: string;
+  photos: string[];
+  index: number;
+  title: string;
+};
+
+type PublicInventoryClientProps = {
+  initialPage: PublicInventoryPaginatedResult;
 };
 
 const formatCurrencyMx = (value: number | null) => {
@@ -35,29 +36,29 @@ const readExtraValue = (extra: Record<string, unknown> | null, keys: string[]) =
   return "";
 };
 
-const getPieceName = (item: PublicInventoryItem) => {
+const getPieceName = (item: PublicInventoryListItem) => {
   const piece = readExtraValue(item.extraData, ["pieza", "descripcion", "descripcion_local", "descripcionLocal"]);
   return piece || item.title || "Sin título";
 };
 
-const getBrand = (item: PublicInventoryItem) => {
+const getBrand = (item: PublicInventoryListItem) => {
   const raw = readExtraValue(item.extraData, ["marca", "marca_nombre", "brand", "marcaVehiculo"]);
   return raw ? raw.toUpperCase() : null;
 };
 
-const getVehicle = (item: PublicInventoryItem) => {
+const getVehicle = (item: PublicInventoryListItem) => {
   const raw = readExtraValue(item.extraData, ["coche", "modelo", "vehiculo"]);
   return raw ? raw.toUpperCase() : null;
 };
 
-const getYearRange = (item: PublicInventoryItem) => {
+const getYearRange = (item: PublicInventoryListItem) => {
   const start = readExtraValue(item.extraData, ["ano_desde", "anoDesde"]);
   const end = readExtraValue(item.extraData, ["ano_hasta", "anoHasta"]);
   if (!start && !end) return null;
   return `${start || "-"} - ${end || "-"}`;
 };
 
-const getOrigin = (item: PublicInventoryItem) => readExtraValue(item.extraData, ["origen", "origen_pieza", "origenPieza"]);
+const getOrigin = (item: PublicInventoryListItem) => readExtraValue(item.extraData, ["origen", "origen_pieza", "origenPieza"]);
 
 const toYearNumber = (value: string) => {
   const match = value.match(/\d{4}/);
@@ -66,7 +67,7 @@ const toYearNumber = (value: string) => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
-const getYearNumbers = (item: PublicInventoryItem) => {
+const getYearNumbers = (item: PublicInventoryListItem) => {
   const startRaw = readExtraValue(item.extraData, ["ano_desde", "anoDesde"]);
   const endRaw = readExtraValue(item.extraData, ["ano_hasta", "anoHasta"]);
   const start = toYearNumber(startRaw);
@@ -84,7 +85,7 @@ const getYearNumbers = (item: PublicInventoryItem) => {
   return years;
 };
 
-const matchesYearFilter = (item: PublicInventoryItem, year: string) => {
+const matchesYearFilter = (item: PublicInventoryListItem, year: string) => {
   if (year === "ALL") return true;
   const numericYear = Number.parseInt(year, 10);
   if (Number.isNaN(numericYear)) return false;
@@ -93,25 +94,12 @@ const matchesYearFilter = (item: PublicInventoryItem, year: string) => {
   return years.includes(numericYear);
 };
 
-const getPhotos = (item: PublicInventoryItem) => {
-  const raw = item.extraData?.photos;
-  if (Array.isArray(raw)) {
-    return raw
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-      .filter((entry) => entry.length);
-  }
-  if (typeof raw === "string" && raw.trim().length) {
-    return [raw.trim()];
-  }
-  return [];
-};
-
-const getInternalStatus = (item: PublicInventoryItem) => {
+const getInternalStatus = (item: PublicInventoryListItem) => {
   const status = readExtraValue(item.extraData, ["estatus_interno", "estatusInterno"]);
   return status ? status.toUpperCase() : "ACTIVO";
 };
 
-const getQueryHaystack = (item: PublicInventoryItem) => {
+const getQueryHaystack = (item: PublicInventoryListItem) => {
   const chunks: string[] = [];
   const piece = getPieceName(item);
   if (piece) chunks.push(piece);
@@ -126,20 +114,125 @@ const getQueryHaystack = (item: PublicInventoryItem) => {
   return chunks.join(" ").toLowerCase();
 };
 
-export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] }) {
+const getPreviewPhoto = (item: PublicInventoryListItem, cached: string[] | undefined) => {
+  if (cached && cached.length) return cached[0];
+  return item.photoPreview ?? null;
+};
+
+export function PublicInventoryClient({ initialPage }: PublicInventoryClientProps) {
   const [query, setQuery] = useState("");
   const [brandFilter, setBrandFilter] = useState("ALL");
   const [vehicleFilter, setVehicleFilter] = useState("ALL");
   const [yearFilter, setYearFilter] = useState("ALL");
   const [pieceFilter, setPieceFilter] = useState("ALL");
-  const [photoModal, setPhotoModal] = useState<null | { photos: string[]; index: number; title: string }>(null);
+  const [photoModal, setPhotoModal] = useState<PhotoModalState | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [items, setItems] = useState<PublicInventoryListItem[]>(initialPage.items);
+  const [totalItems, setTotalItems] = useState(initialPage.total);
+  const [currentPage, setCurrentPage] = useState(initialPage.page);
+  const [pageSize] = useState(initialPage.pageSize);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [photoCache, setPhotoCache] = useState<Record<string, string[]>>({});
+  const [photoLoadingId, setPhotoLoadingId] = useState<string | null>(null);
+  const [photoStatus, setPhotoStatus] = useState<{ itemId: string | null; message: string | null }>({ itemId: null, message: null });
 
-  const openPhotoModal = useCallback((photoList: string[], startIndex: number, title: string) => {
-    if (!photoList.length) return;
-    const safeIndex = Math.min(Math.max(startIndex, 0), photoList.length - 1);
-    setPhotoModal({ photos: photoList, index: safeIndex, title });
+  useEffect(() => {
+    setItems(initialPage.items);
+    setTotalItems(initialPage.total);
+    setCurrentPage(initialPage.page);
+    setPhotoCache({});
+    setListError(null);
+  }, [initialPage]);
+
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const itemsLoaded = items.length;
+
+  const fetchPage = useCallback(
+    async (pageToFetch: number) => {
+      const response = await fetch(`/api/public-inventory?page=${pageToFetch}&pageSize=${pageSize}`, {
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error("No pudimos cargar la página solicitada");
+      }
+      return (await response.json()) as PublicInventoryPaginatedResult;
+    },
+    [pageSize]
+  );
+
+  const appendItems = useCallback((nextItems: PublicInventoryListItem[]) => {
+    setItems((prev) => {
+      const seen = new Set(prev.map((item) => item.id));
+      const merged = [...prev];
+      nextItems.forEach((item) => {
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          merged.push(item);
+        }
+      });
+      return merged;
+    });
   }, []);
+
+  const loadMoreItems = useCallback(async () => {
+    if (loadingMore) return;
+    const nextPage = currentPage + 1;
+    if (nextPage > totalPages) return;
+    setLoadingMore(true);
+    try {
+      const nextData = await fetchPage(nextPage);
+      appendItems(nextData.items);
+      setCurrentPage(nextPage);
+      setTotalItems(nextData.total);
+      setListError(null);
+    } catch (error) {
+      console.error(error);
+      setListError("No pudimos cargar más piezas. Intenta de nuevo.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [appendItems, currentPage, fetchPage, loadingMore, totalPages]);
+
+  const ensurePhotos = useCallback(
+    async (item: PublicInventoryListItem) => {
+      const cached = photoCache[item.id];
+      if (cached) return cached;
+      setPhotoLoadingId(item.id);
+      setPhotoStatus({ itemId: null, message: null });
+      try {
+        const response = await fetch(`/api/public-inventory/${item.id}/photos`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("REQUEST_FAILED");
+        }
+        const data = (await response.json()) as { photos?: unknown };
+        const list = Array.isArray(data.photos)
+          ? data.photos
+              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+              .filter((entry): entry is string => entry.length > 0)
+          : [];
+        setPhotoCache((prev) => ({ ...prev, [item.id]: list }));
+        return list;
+      } catch (error) {
+        console.error(error);
+        setPhotoStatus({ itemId: item.id, message: "No pudimos cargar las fotos" });
+        return [];
+      } finally {
+        setPhotoLoadingId((current) => (current === item.id ? null : current));
+      }
+    },
+    [photoCache]
+  );
+
+  const openPhotoModal = useCallback(
+    async (item: PublicInventoryListItem, startIndex = 0) => {
+      const photos = await ensurePhotos(item);
+      if (!photos.length) return;
+      const safeIndex = Math.min(Math.max(startIndex, 0), photos.length - 1);
+      setPhotoModal({ itemId: item.id, photos, index: safeIndex, title: getPieceName(item) });
+    },
+    [ensurePhotos]
+  );
 
   const closePhotoModal = useCallback(() => {
     setPhotoModal(null);
@@ -158,6 +251,14 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
       if (!prev) return prev;
       const nextIndex = (prev.index - 1 + prev.photos.length) % prev.photos.length;
       return { ...prev, index: nextIndex };
+    });
+  }, []);
+
+  const jumpToPhoto = useCallback((index: number) => {
+    setPhotoModal((prev) => {
+      if (!prev) return prev;
+      const safeIndex = Math.min(Math.max(index, 0), prev.photos.length - 1);
+      return { ...prev, index: safeIndex };
     });
   }, []);
 
@@ -255,6 +356,8 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
     });
     return Array.from(counter.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
+
+  const moreItemsAvailable = currentPage < totalPages;
 
   return (
     <>
@@ -401,10 +504,18 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-400">
             <span>
-              Mostrando <strong className="text-white">{filteredItems.length}</strong> de {items.length} publicaciones activas
+              Mostrando <strong className="text-white">{filteredItems.length}</strong> de {totalItems} publicaciones activas
             </span>
-            <span className="text-slate-500">Actualizado automáticamente desde el inventario interno</span>
+            <span className="text-slate-500">
+              Filtrando sobre {itemsLoaded} registros cargados · {itemsLoaded < totalItems ? `Faltan ${totalItems - itemsLoaded}` : "Todo cargado"}
+            </span>
           </div>
+          {itemsLoaded < totalItems && (
+            <div className="text-xs text-slate-500">
+              Usa "Cargar más" para traer el resto sin esperar a que se descargue todo el inventario.
+            </div>
+          )}
+          {listError && <div className="text-sm text-rose-400">{listError}</div>}
 
           {filteredItems.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-12 text-center text-slate-400">
@@ -420,8 +531,12 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                 const yearRange = getYearRange(item);
                 const origin = getOrigin(item);
                 const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
-                const photos = getPhotos(item);
-                const primaryPhoto = photos[0] ?? null;
+                const cachedPhotos = photoCache[item.id] ?? [];
+                const previewPhoto = getPreviewPhoto(item, cachedPhotos);
+                const displayPhotoCount = cachedPhotos.length || item.photoCount || 0;
+                const hasPhotos = displayPhotoCount > 0 || Boolean(previewPhoto);
+                const isLoadingPhotos = photoLoadingId === item.id;
+                const photoMessage = photoStatus.itemId === item.id ? photoStatus.message : null;
                 const updatedLabel = (() => {
                   const parsed = new Date(item.updatedAt);
                   return Number.isNaN(parsed.getTime()) ? "-" : parsed.toLocaleDateString("es-MX");
@@ -434,13 +549,14 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                     </div>
                     <div className="mt-3 flex gap-3">
                       <div className="h-20 w-20 flex-shrink-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
-                        {primaryPhoto ? (
+                        {previewPhoto ? (
                           <button
                             type="button"
-                            onClick={() => openPhotoModal(photos, 0, pieceName)}
+                            onClick={() => openPhotoModal(item, 0)}
+                            disabled={!hasPhotos || isLoadingPhotos}
                             className="block h-full w-full"
                           >
-                            <img src={primaryPhoto} alt={pieceName} className="h-full w-full object-cover" loading="lazy" />
+                            <img src={previewPhoto} alt={pieceName} className="h-full w-full object-cover" loading="lazy" />
                           </button>
                         ) : (
                           <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">Sin foto</div>
@@ -468,15 +584,17 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                           Ver en ML
                         </a>
                       )}
-                      {photos.length > 1 && (
+                      {hasPhotos && (
                         <button
                           type="button"
-                          onClick={() => openPhotoModal(photos, 0, pieceName)}
-                          className="rounded-full border border-slate-700 px-3 py-1"
+                          onClick={() => openPhotoModal(item, 0)}
+                          disabled={isLoadingPhotos}
+                          className="rounded-full border border-slate-700 px-3 py-1 disabled:opacity-50"
                         >
-                          Ver {photos.length} fotos
+                          {isLoadingPhotos ? "Cargando fotos..." : `Ver ${displayPhotoCount || ""} fotos`}
                         </button>
                       )}
+                      {photoMessage && <span className="text-xs text-rose-400">{photoMessage}</span>}
                       {item.sellerCustomField && <span className="rounded-full border border-slate-700 px-3 py-1">{item.sellerCustomField}</span>}
                     </div>
                   </article>
@@ -504,12 +622,15 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                     const yearRange = getYearRange(item);
                     const origin = getOrigin(item);
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
-                    const photos = getPhotos(item);
-                    const primaryPhoto = photos[0] ?? null;
-                    const extraPreview = photos.slice(1, 4);
-                    const extraCount = Math.max(0, photos.length - (1 + extraPreview.length));
+                    const cachedPhotos = photoCache[item.id] ?? [];
+                    const previewPhoto = getPreviewPhoto(item, cachedPhotos);
+                    const extraPreview = cachedPhotos.slice(1, 4);
+                    const extraCount = Math.max(0, cachedPhotos.length - (1 + extraPreview.length));
+                    const hasPhotos = (item.photoCount ?? 0) > 0 || Boolean(previewPhoto);
+                    const isLoadingPhotos = photoLoadingId === item.id;
+                    const displayPhotoCount = cachedPhotos.length || item.photoCount || 0;
+                    const photoMessage = photoStatus.itemId === item.id ? photoStatus.message : null;
                     const pieceName = getPieceName(item);
-                    const openModalAt = (index: number) => openPhotoModal(photos, index, pieceName);
                     const updatedLabel = (() => {
                       const parsed = new Date(item.updatedAt);
                       return Number.isNaN(parsed.getTime()) ? "-" : parsed.toLocaleDateString("es-MX");
@@ -546,13 +667,14 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-3">
                             <div className="h-16 w-16 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
-                                  {primaryPhoto ? (
+                                  {previewPhoto ? (
                                     <button
                                       type="button"
-                                      onClick={() => openModalAt(0)}
-                                      className="group relative block h-full w-full"
+                                      onClick={() => openPhotoModal(item, 0)}
+                                      disabled={!hasPhotos || isLoadingPhotos}
+                                      className="group relative block h-full w-full disabled:opacity-50"
                                     >
-                                      <img src={primaryPhoto} alt={item.title ?? "Foto principal"} className="h-full w-full object-cover" loading="lazy" />
+                                      <img src={previewPhoto} alt={item.title ?? "Foto principal"} className="h-full w-full object-cover" loading="lazy" />
                                       <span className="pointer-events-none absolute inset-0 bg-black/30 opacity-0 transition group-hover:opacity-100" />
                                     </button>
                                   ) : (
@@ -566,7 +688,7 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                                     <button
                                       type="button"
                                       key={`${item.id}-thumb-${index}`}
-                                          onClick={() => openModalAt(index + 1)}
+                                      onClick={() => openPhotoModal(item, index + 1)}
                                       className="h-10 w-10 overflow-hidden rounded-full border border-slate-800"
                                     >
                                       <img
@@ -579,15 +701,26 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                                   ))}
                                 </div>
                                 {extraCount > 0 && (
-                                      <button
-                                        type="button"
-                                        onClick={() => openModalAt(photos.length - extraCount)}
-                                        className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-700 bg-slate-900/70 text-[11px] font-semibold text-slate-300"
-                                      >
-                                        +{extraCount}
-                                      </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openPhotoModal(item, cachedPhotos.length - extraCount)}
+                                    className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-700 bg-slate-900/70 text-[11px] font-semibold text-slate-300"
+                                  >
+                                    +{extraCount}
+                                  </button>
                                 )}
                               </div>
+                            )}
+                            {photoMessage && <div className="text-xs text-rose-400">{photoMessage}</div>}
+                            {hasPhotos && !cachedPhotos.length && displayPhotoCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => openPhotoModal(item, 0)}
+                                disabled={isLoadingPhotos}
+                                className="text-xs text-emerald-300 underline-offset-2 hover:underline disabled:opacity-50"
+                              >
+                                {isLoadingPhotos ? "Cargando fotos..." : `Ver ${displayPhotoCount} fotos`}
+                              </button>
                             )}
                           </div>
                         </td>
@@ -598,6 +731,18 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
               </table>
             </div>
             </>
+          )}
+          {moreItemsAvailable && (
+            <div className="mt-6 flex justify-center">
+              <button
+                type="button"
+                onClick={loadMoreItems}
+                disabled={loadingMore}
+                className="rounded-full border border-emerald-500/50 bg-emerald-500/10 px-6 py-2 text-sm font-semibold uppercase tracking-widest text-emerald-200 disabled:opacity-50"
+              >
+                {loadingMore ? "Cargando..." : `Cargar más (${itemsLoaded}/${totalItems})`}
+              </button>
+            </div>
           )}
         </section>
       </main>
@@ -649,7 +794,7 @@ export function PublicInventoryClient({ items }: { items: PublicInventoryItem[] 
                 <button
                   key={`${photo}-${idx}`}
                   type="button"
-                  onClick={() => openPhotoModal(photoModal.photos, idx, photoModal.title)}
+                  onClick={() => jumpToPhoto(idx)}
                   className={`h-12 w-12 overflow-hidden rounded-lg border ${
                     idx === photoModal.index ? "border-emerald-400" : "border-slate-700"
                   }`}
