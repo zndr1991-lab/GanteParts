@@ -512,7 +512,7 @@ export function PublicInventoryClient({ initialPage }: PublicInventoryClientProp
           </div>
           {itemsLoaded < totalItems && (
             <div className="text-xs text-slate-500">
-              Usa "Cargar más" para traer el resto sin esperar a que se descargue todo el inventario.
+              Usa &quot;Cargar más&quot; para traer el resto sin esperar a que se descargue todo el inventario.
             </div>
           )}
           {listError && <div className="text-sm text-rose-400">{listError}</div>}

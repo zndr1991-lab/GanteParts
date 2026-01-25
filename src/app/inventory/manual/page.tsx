@@ -6,6 +6,7 @@ import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { redirect } from "next/navigation";
 
 import { InventoryClient } from "../client";
+import type { InventoryClientItem, InventoryInitialPage } from "../client";
 
 const MANUAL_SUGGESTION_LIMIT = 250;
 
@@ -24,11 +25,20 @@ export default async function ManualInventoryPage() {
     take: MANUAL_SUGGESTION_LIMIT
   });
 
-  const serialized = suggestionItems.map((item) => serializeInventoryItem(item));
+  const serialized: InventoryClientItem[] = suggestionItems.map((item) =>
+    serializeInventoryItem(item) as InventoryClientItem
+  );
+
+  const initialPage: InventoryInitialPage = {
+    items: serialized,
+    page: 1,
+    pageSize: serialized.length || 1,
+    total: serialized.length
+  };
 
   return (
     <InventoryClient
-      initialPage={{ items: serialized, page: 1, pageSize: serialized.length || 1, total: serialized.length }}
+      initialPage={initialPage}
       userRole={session.user.role ?? "operator"}
       mode="manual-only"
     />

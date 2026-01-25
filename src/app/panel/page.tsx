@@ -1,9 +1,18 @@
+import type { Route } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
 
-const shortcuts = [
+type Shortcut = {
+  href: Route;
+  title: string;
+  description: string;
+  accent: string;
+  border: string;
+};
+
+const shortcuts: Shortcut[] = [
   {
     href: "/inventory",
     title: "Inventario completo",

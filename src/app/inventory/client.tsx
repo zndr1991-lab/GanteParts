@@ -77,6 +77,9 @@ type InventoryPageResponse = {
   totalPages?: number;
 };
 
+export type InventoryClientItem = Item;
+export type InventoryInitialPage = InventoryPageResponse;
+
 type InventoryClientProps = {
   initialPage: InventoryPageResponse;
   userRole: string;

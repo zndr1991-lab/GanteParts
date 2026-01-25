@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { InventoryClient } from "./client";
+import type { InventoryClientItem, InventoryInitialPage } from "./client";
 import { serializeInventoryItem } from "@/lib/inventory-serialization";
 
 const INITIAL_PAGE_SIZE = 100;
@@ -25,11 +26,18 @@ export default async function InventoryPage() {
     prisma.inventoryItem.count({ where })
   ]);
 
-  const plainItems = items.map((item) => serializeInventoryItem(item));
+  const plainItems: InventoryClientItem[] = items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
+
+  const initialPage: InventoryInitialPage = {
+    items: plainItems,
+    page: 1,
+    pageSize: INITIAL_PAGE_SIZE,
+    total
+  };
 
   return (
     <InventoryClient
-      initialPage={{ items: plainItems, page: 1, pageSize: INITIAL_PAGE_SIZE, total }}
+      initialPage={initialPage}
       userRole={session.user.role ?? "operator"}
     />
   );
