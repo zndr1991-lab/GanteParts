@@ -29,6 +29,8 @@ const ACTIVE_ITEMS_WHERE = {
   status: "active" as const
 };
 
+const PHOTO_PREVIEW_LIMIT = 6;
+
 const cachedPublicInventoryPage = unstable_cache(
   async (page: number, pageSize: number) => {
     const [total, items] = await Promise.all([
@@ -52,8 +54,10 @@ const cachedPublicInventoryPage = unstable_cache(
       })
     ]);
 
-    const serialized = items.map((item) => {
-      const serializedItem = serializeInventoryItem(item, { includePhotoPreview: true });
+    const serialized = items.map((item, index) => {
+      const serializedItem = serializeInventoryItem(item, {
+        includePhotoPreview: index < PHOTO_PREVIEW_LIMIT
+      });
       return {
         id: serializedItem.id,
         skuInternal: serializedItem.skuInternal,
