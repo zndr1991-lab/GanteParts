@@ -1,12 +1,15 @@
 export const dynamic = "force-dynamic";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { InventoryClient } from "./client";
 import type { InventoryClientItem, InventoryInitialPage } from "./client";
-import { serializeInventoryItem } from "@/lib/inventory-serialization";
+import { getInventorySnapshot } from "@/lib/inventory-cache";
 
-const INITIAL_PAGE_SIZE = 100;
+const INVENTORY_FULL_PAGE_SIZE_ENV = Number(process.env.INVENTORY_FULL_LOAD_LIMIT ?? "2000");
+const INVENTORY_FULL_PAGE_SIZE =
+  Number.isFinite(INVENTORY_FULL_PAGE_SIZE_ENV) && INVENTORY_FULL_PAGE_SIZE_ENV > 0
+    ? INVENTORY_FULL_PAGE_SIZE_ENV
+    : 2000;
 
 export default async function InventoryPage() {
   const session = await auth();
@@ -15,23 +18,15 @@ export default async function InventoryPage() {
   }
 
   const role = (session.user.role ?? "").toLowerCase();
-  const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
-
-  const [items, total] = await Promise.all([
-    prisma.inventoryItem.findMany({
-      where,
-      orderBy: { updatedAt: "desc" },
-      take: INITIAL_PAGE_SIZE
-    }),
-    prisma.inventoryItem.count({ where })
-  ]);
-
-  const plainItems: InventoryClientItem[] = items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
+  const ownerId = role === "viewer" ? session.user.id : null;
+  const { items, total } = await getInventorySnapshot(ownerId, INVENTORY_FULL_PAGE_SIZE);
+  const plainItems = items as InventoryClientItem[];
+  const initialPageSize = plainItems.length || INVENTORY_FULL_PAGE_SIZE;
 
   const initialPage: InventoryInitialPage = {
     items: plainItems,
     page: 1,
-    pageSize: INITIAL_PAGE_SIZE,
+    pageSize: initialPageSize,
     total
   };
 

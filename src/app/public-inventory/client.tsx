@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { PublicInventoryListItem, PublicInventoryPaginatedResult } from "@/lib/public-inventory";
@@ -134,6 +135,7 @@ export function PublicInventoryClient({ initialPage }: PublicInventoryClientProp
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [photoCache, setPhotoCache] = useState<Record<string, string[]>>({});
+  const [photoErrorIds, setPhotoErrorIds] = useState<Set<string>>(new Set());
   const [photoLoadingId, setPhotoLoadingId] = useState<string | null>(null);
   const [photoStatus, setPhotoStatus] = useState<{ itemId: string | null; message: string | null }>({ itemId: null, message: null });
 
@@ -196,14 +198,17 @@ export function PublicInventoryClient({ initialPage }: PublicInventoryClientProp
 
   const ensurePhotos = useCallback(
     async (item: PublicInventoryListItem) => {
+      if (photoErrorIds.has(item.id)) {
+        return [];
+      }
       const cached = photoCache[item.id];
       if (cached) return cached;
       setPhotoLoadingId(item.id);
       setPhotoStatus({ itemId: null, message: null });
       try {
-        const response = await fetch(`/api/public-inventory/${item.id}/photos`, { cache: "no-store" });
+        const response = await fetch(`/api/public-inventory/${item.id}/photos`, { cache: "no-store", method: "GET" });
         if (!response.ok) {
-          throw new Error("REQUEST_FAILED");
+          throw new Error(`REQUEST_FAILED_${response.status}`);
         }
         const data = (await response.json()) as { photos?: unknown };
         const list = Array.isArray(data.photos)
@@ -211,17 +216,21 @@ export function PublicInventoryClient({ initialPage }: PublicInventoryClientProp
               .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
               .filter((entry): entry is string => entry.length > 0)
           : [];
+        if (!list.length) {
+          throw new Error("EMPTY_PHOTOS");
+        }
         setPhotoCache((prev) => ({ ...prev, [item.id]: list }));
         return list;
       } catch (error) {
-        console.error(error);
+        console.error("Public inventory photos error", error);
         setPhotoStatus({ itemId: item.id, message: "No pudimos cargar las fotos" });
+        setPhotoErrorIds((prev) => new Set(prev).add(item.id));
         return [];
       } finally {
         setPhotoLoadingId((current) => (current === item.id ? null : current));
       }
     },
-    [photoCache]
+    [photoCache, photoErrorIds]
   );
 
   const openPhotoModal = useCallback(
@@ -364,7 +373,15 @@ export function PublicInventoryClient({ initialPage }: PublicInventoryClientProp
       <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-10">
-          <div className="text-xs uppercase tracking-[0.3em] text-emerald-400">Inventario Público</div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs uppercase tracking-[0.3em] text-emerald-400">Inventario Público</div>
+            <Link
+              href="/"
+              className="rounded-full border border-emerald-500/60 bg-emerald-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-emerald-200 hover:border-emerald-300"
+            >
+              Volver al inicio
+            </Link>
+          </div>
           <h1 className="text-3xl font-semibold text-white md:text-4xl">Vista en renglones igual a la app interna</h1>
           <p className="text-slate-400 md:text-lg">
             Consulta las columnas SKU, pieza, marca, coche, año, origen, precio y fotos tal como las ves internamente, sin necesidad de
@@ -745,6 +762,15 @@ export function PublicInventoryClient({ initialPage }: PublicInventoryClientProp
             </div>
           )}
         </section>
+
+        <div className="mt-8 flex justify-center">
+          <Link
+            href="/"
+            className="rounded-full border border-slate-700 bg-slate-900/70 px-6 py-2 text-sm font-semibold uppercase tracking-widest text-slate-100 hover:border-emerald-400 hover:text-emerald-200"
+          >
+            Regresar al inicio
+          </Link>
+        </div>
       </main>
       </div>
 

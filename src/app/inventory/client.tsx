@@ -409,6 +409,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [totalItems, setTotalItems] = useState(initialPage.total);
   const [listLoading, setListLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingAll, setLoadingAll] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: true,
     manual: true,
@@ -599,6 +600,34 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const nextPage = Math.floor(items.length / pageSize) + 1;
     await fetchPage(nextPage, { append: true });
   }, [fetchPage, hasMoreItems, items.length, loadingMore]);
+
+  const loadAllItems = useCallback(async () => {
+    if (loadingAll) return;
+    setLoadingAll(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/inventory/all", { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "No se pudo traer todo el inventario");
+      }
+      const list: Item[] = Array.isArray(data.items) ? data.items : [];
+      setItems(list);
+      const reportedTotal = typeof data.total === "number" ? data.total : list.length;
+      setTotalItems(reportedTotal);
+      setSelectedIds([]);
+      setFocusedRowInfo(null);
+      pageSizeRef.current = list.length || pageSizeRef.current;
+      if (data.truncated) {
+        const missing = Math.max(0, reportedTotal - list.length);
+        setMessage(`Mostrando ${list.length} registros. Faltan ${missing} por el limite maximo permitido.`);
+      }
+    } catch (err: any) {
+      setMessage(err?.message || "No se pudo traer todo el inventario");
+    } finally {
+      setLoadingAll(false);
+    }
+  }, [loadingAll, setMessage]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -2135,14 +2164,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             <div className="mt-2 flex flex-col gap-3 sm:mt-3 sm:flex-row sm:items-center sm:justify-between">
               <h1 className="text-2xl font-semibold">Stock y precios</h1>
               <div className="flex flex-col gap-2 sm:flex-row">
-                {isManualOnly && (
-                  <Link
-                    href="/panel"
-                    className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
-                  >
-                    Volver al menú
-                  </Link>
-                )}
+                <Link
+                  href="/panel"
+                  className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
+                >
+                  Volver al menú
+                </Link>
                 <a
                   href="/api/auth/signout"
                   className="rounded-md border border-slate-700 px-3 py-2 text-center text-sm text-slate-200 hover:border-amber-400"
@@ -2733,15 +2760,28 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             />
           </div>
           {hasMoreItems && (
-            <div className="flex justify-center pt-4">
-              <button
-                type="button"
-                onClick={loadMore}
-                disabled={loadingMore || listLoading}
-                className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
-              >
-                {loadingMore ? "Cargando..." : "Cargar más"}
-              </button>
+            <div className="flex flex-col items-center gap-3 pt-4">
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loadingMore || listLoading || loadingAll}
+                  className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
+                >
+                  {loadingMore ? "Cargando..." : "Cargar más"}
+                </button>
+                <button
+                  type="button"
+                  onClick={loadAllItems}
+                  disabled={loadingAll || listLoading}
+                  className="rounded-md border border-amber-400 px-4 py-2 text-sm font-semibold text-amber-200 hover:border-amber-200 disabled:opacity-60"
+                >
+                  {loadingAll ? "Cargando todo..." : "Cargar todo"}
+                </button>
+              </div>
+              <p className="text-center text-[11px] text-slate-500">
+                Presiona &quot;Cargar todo&quot; para traer los {totalItems} registros en una sola vista. Puede tardar si el inventario es grande.
+              </p>
             </div>
           )}
         </section>

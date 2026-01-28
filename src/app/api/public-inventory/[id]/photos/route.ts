@@ -1,3 +1,6 @@
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 
 import { getPublicInventoryPhotos } from "@/lib/public-inventory";
@@ -17,5 +20,5 @@ export async function GET(_request: Request, { params }: Params) {
     return NextResponse.json({ message: "Item not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ photos });
+  return NextResponse.json({ photos }, { headers: { "Cache-Control": "no-store" } });
 }

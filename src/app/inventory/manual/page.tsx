@@ -1,14 +1,13 @@
 export const dynamic = "force-dynamic";
 
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { serializeInventoryItem } from "@/lib/inventory-serialization";
+import { getInventorySnapshot } from "@/lib/inventory-cache";
 import { redirect } from "next/navigation";
 
 import { InventoryClient } from "../client";
 import type { InventoryClientItem, InventoryInitialPage } from "../client";
 
-const MANUAL_SUGGESTION_LIMIT = 250;
+const MANUAL_SUGGESTION_LIMIT = 80;
 
 export default async function ManualInventoryPage() {
   const session = await auth();
@@ -17,17 +16,9 @@ export default async function ManualInventoryPage() {
   }
 
   const role = (session.user.role ?? "operator").toLowerCase();
-  const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
-
-  const suggestionItems = await prisma.inventoryItem.findMany({
-    where,
-    orderBy: { updatedAt: "desc" },
-    take: MANUAL_SUGGESTION_LIMIT
-  });
-
-  const serialized: InventoryClientItem[] = suggestionItems.map((item) =>
-    serializeInventoryItem(item) as InventoryClientItem
-  );
+  const ownerId = role === "viewer" ? session.user.id : null;
+  const { items } = await getInventorySnapshot(ownerId, MANUAL_SUGGESTION_LIMIT);
+  const serialized = items as InventoryClientItem[];
 
   const initialPage: InventoryInitialPage = {
     items: serialized,

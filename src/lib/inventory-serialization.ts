@@ -1,5 +1,19 @@
 export const MAX_ITEM_PHOTOS = 8;
 
+export const INVENTORY_LIST_SELECT = {
+  id: true,
+  skuInternal: true,
+  sellerCustomField: true,
+  title: true,
+  price: true,
+  stock: true,
+  status: true,
+  mlItemId: true,
+  extraData: true,
+  createdAt: true,
+  updatedAt: true
+} as const;
+
 export const sanitizePhotosArray = (value: unknown, limit = MAX_ITEM_PHOTOS): string[] => {
   if (!value) return [];
   if (Array.isArray(value)) {
