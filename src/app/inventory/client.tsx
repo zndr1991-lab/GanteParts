@@ -369,15 +369,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     key: SortKey;
     direction: "asc" | "desc";
   } | null>(null);
-  const [mlActionToast, setMlActionToast] = useState<
-    { type: "success" | "error" | "info"; message: string } | null
-  >(null);
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
   const [photoModalLoading, setPhotoModalLoading] = useState(false);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mlToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
   const [isMobile, setIsMobile] = useState(false);
@@ -438,17 +434,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }, 6000);
   }, []);
 
-  const triggerMlToast = useCallback((type: "success" | "error" | "info", text: string) => {
-    setMlActionToast({ type, message: text });
-    if (mlToastTimeoutRef.current) {
-      clearTimeout(mlToastTimeoutRef.current);
-    }
-    mlToastTimeoutRef.current = setTimeout(() => {
-      setMlActionToast(null);
-      mlToastTimeoutRef.current = null;
-    }, 6000);
-  }, []);
-
   const fetchNotifications = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
     if (!silent && isMountedRef.current) {
@@ -489,9 +474,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       isMountedRef.current = false;
       if (toastTimeoutRef.current) {
         clearTimeout(toastTimeoutRef.current);
-      }
-      if (mlToastTimeoutRef.current) {
-        clearTimeout(mlToastTimeoutRef.current);
       }
     };
   }, []);
@@ -673,14 +655,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     async (action: "pause" | "activate") => {
       if (!canManageMercadoLibre) {
         setMessage("Tu rol no puede sincronizar con Mercado Libre");
-        triggerMlToast("error", "Tu rol no puede sincronizar con Mercado Libre");
-        console.warn("ML sync blocked: role", { role: normalizedRole });
         return;
       }
       if (!selectedIds.length) {
         setMessage("Selecciona al menos un registro");
-        triggerMlToast("info", "Selecciona al menos un registro");
-        console.warn("ML sync blocked: no selection");
         return;
       }
       const selectedSet = new Set(selectedIds);
@@ -689,8 +667,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       );
       if (!eligible.length) {
         setMessage("Los registros seleccionados no tienen codigo de Mercado Libre");
-        triggerMlToast("error", "Los registros seleccionados no tienen código de Mercado Libre");
-        console.warn("ML sync blocked: no eligible items", { selectedIds });
         return;
       }
       const confirmText =
@@ -700,19 +676,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       const confirmed = window.confirm(confirmText);
       if (!confirmed) {
         setMessage("Accion cancelada");
-        triggerMlToast("info", "Acción cancelada");
-        console.info("ML sync cancelled by user");
         return;
       }
 
       setMlAction(action);
       setMessage(null);
       try {
-        triggerMlToast(
-          "info",
-          action === "pause" ? "Pausando publicaciones en ML..." : "Activando publicaciones en ML..."
-        );
-        console.info("ML sync start", { action, ids: eligible.map((item) => item.id) });
         const res = await fetch("/api/mercadolibre/items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -720,18 +689,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          console.error("ML sync failed", { status: res.status, data });
-          if (Array.isArray(data.failed) && data.failed.length) {
-            const sample = data.failed.slice(0, 2).map((item: any) => item.reason).join(" | ");
-            const msg = `No se pudo completar. Fallidos: ${data.failed.length}. ${sample}`;
-            setMessage(msg);
-            triggerMlToast("error", msg);
-            return;
-          }
-          const msg = data.error || "No se pudo sincronizar con Mercado Libre";
-          setMessage(msg);
-          triggerMlToast("error", msg);
-          return;
+          throw new Error(data.error || "No se pudo sincronizar con Mercado Libre");
         }
         const parts: string[] = [];
         if (typeof data.successCount === "number") {
@@ -741,22 +699,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           parts.push(`Fallidos: ${data.failed.length}`);
         }
         setMessage(parts.length ? parts.join(" | ") : "Mercado Libre actualizado");
-        if (Array.isArray(data.failed) && data.failed.length) {
-          const sample = data.failed.slice(0, 2).map((item: any) => item.reason).join(" | ");
-          triggerMlToast("info", `Parcial: ${data.failed.length} fallidos. ${sample}`);
-        } else {
-          triggerMlToast("success", "Mercado Libre actualizado correctamente");
-        }
         await refresh();
       } catch (err: any) {
-        console.error("ML sync error", err);
         setMessage(err.message || "No se pudo sincronizar con Mercado Libre");
-        triggerMlToast("error", err.message || "No se pudo sincronizar con Mercado Libre");
       } finally {
         setMlAction(null);
       }
     },
-    [canManageMercadoLibre, items, refresh, selectedIds, triggerMlToast]
+    [canManageMercadoLibre, items, refresh, selectedIds]
   );
 
   const updateEditedPhotosForFiles = useCallback((nextFiles: File[]) => {
@@ -2061,31 +2011,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           </div>
         </div>
       )}
-      {mlActionToast && (
-        <div className="fixed right-4 top-20 z-50 w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900/95 p-4 shadow-2xl backdrop-blur">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.4em] text-amber-400">Mercado Libre</p>
-              <p className={
-                mlActionToast.type === "success"
-                  ? "text-sm text-emerald-200"
-                  : mlActionToast.type === "error"
-                  ? "text-sm text-rose-300"
-                  : "text-sm text-slate-200"
-              }>
-                {mlActionToast.message}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="rounded-full border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:border-amber-400"
-              onClick={() => setMlActionToast(null)}
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
       <main className="min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 sm:py-8">
         <div className="mx-auto flex max-w-screen-2xl flex-col gap-6">
           <header className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm sm:p-6">
@@ -2607,19 +2532,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     : "Selecciona registros con codigo de Mercado Libre"}
                   {hasSelectedWithoutMl ? " · Algunos seleccionados no tienen codigo" : ""}
                 </p>
-                {mlActionToast && (
-                  <p
-                    className={
-                      mlActionToast.type === "success"
-                        ? "text-xs text-emerald-200"
-                        : mlActionToast.type === "error"
-                        ? "text-xs text-rose-300"
-                        : "text-xs text-amber-200"
-                    }
-                  >
-                    {mlActionToast.message}
-                  </p>
-                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
