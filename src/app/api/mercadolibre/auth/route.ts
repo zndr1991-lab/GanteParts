@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { auth } from "@/lib/auth";
 
-const AUTH_URL = "https://auth.mercadolibre.com.mx/authorization";
+const AUTH_URL = process.env.ML_AUTH_URL || "https://auth.mercadolibre.com.mx/authorization";
 const STATE_COOKIE = "ml_oauth_state";
 const STATE_TTL_SECONDS = 10 * 60;
 
@@ -33,7 +33,7 @@ export async function GET() {
   cookieStore.set(STATE_COOKIE, state, {
     httpOnly: true,
     sameSite: "lax",
-    secure: true,
+    secure: process.env.NODE_ENV === "production",
     maxAge: STATE_TTL_SECONDS,
     path: "/"
   });

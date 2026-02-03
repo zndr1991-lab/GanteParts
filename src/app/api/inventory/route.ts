@@ -370,28 +370,32 @@ export async function PATCH(req: Request) {
     throw err;
   }
 
-  await prisma.auditLog.create({
-    data: {
-      action: "inventory:update",
-      userId: session.user.id,
-      itemId: id,
-      metadata: {
-        estatusInterno: estatusInterno ?? null,
-        status: status ?? null,
-        fechaPrestamoPago: fechaPrestamoPago ?? null,
-        prestadoVendidoA: prestadoVendidoA ?? null,
-        origen: origen ?? null,
-        ubicacion: ubicacion ?? null,
-        marca: marca ?? null,
-        coche: coche ?? null,
-        anoDesde: anoDesde ?? null,
-        anoHasta: anoHasta ?? null,
-        skuInternal: skuInternal ?? null,
-        price: price ?? null,
-        mlItemId: mlItemId ?? null
+  try {
+    await prisma.auditLog.create({
+      data: {
+        action: "inventory:update",
+        userId: session.user.id,
+        itemId: id,
+        metadata: {
+          estatusInterno: estatusInterno ?? null,
+          status: status ?? null,
+          fechaPrestamoPago: fechaPrestamoPago ?? null,
+          prestadoVendidoA: prestadoVendidoA ?? null,
+          origen: origen ?? null,
+          ubicacion: ubicacion ?? null,
+          marca: marca ?? null,
+          coche: coche ?? null,
+          anoDesde: anoDesde ?? null,
+          anoHasta: anoHasta ?? null,
+          skuInternal: skuInternal ?? null,
+          price: price ?? null,
+          mlItemId: mlItemId ?? null
+        }
       }
-    }
-  });
+    });
+  } catch (logErr) {
+    console.error("Error al crear auditLog de inventario", logErr);
+  }
 
   return NextResponse.json({
     ...serializeInventoryItem(item),
