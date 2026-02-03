@@ -1,6 +1,8 @@
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+import { createHmac, timingSafeEqual } from "crypto";
+
 import { fetchItemSnapshotByMlUserId, getMercadoLibreAccountByMlUserId } from "@/lib/mercadolibre";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
@@ -17,10 +19,23 @@ const STATUS_MAPPING: Record<string, string> = {
 
 const SUPPORTED_TOPICS = new Set(["items"]);
 
-function verifySecret(req: Request) {
-  const provided = req.headers.get("x-ml-signature") || "";
-  const expected = process.env.ML_WEBHOOK_SECRET || "";
-  return expected.length > 0 && provided === expected;
+function verifySignature(params: { signatureHeader: string; secret: string; rawBody: string }) {
+  const { signatureHeader, secret, rawBody } = params;
+  if (!secret) return true;
+  if (!signatureHeader) return false;
+  if (signatureHeader === secret) return true;
+
+  const match = signatureHeader.match(/ts=([^,]+),v1=([a-f0-9]+)/i);
+  if (!match) return false;
+  const [, ts, signature] = match;
+  const payload = `${ts}.${rawBody}`;
+  const digest = createHmac("sha256", secret).update(payload).digest("hex");
+  if (digest.length !== signature.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(signature, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 function extractItemId(resource?: string | null) {
@@ -43,11 +58,57 @@ function mapStatus(status?: string | null) {
 }
 
 export async function POST(req: Request) {
-  if (!verifySecret(req)) {
+  const rawBody = await req.text();
+  let payload: any = null;
+  if (rawBody) {
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      payload = null;
+    }
+  }
+  const signatureHeader = req.headers.get("x-ml-signature") || "";
+  const secret = process.env.ML_WEBHOOK_SECRET || "";
+
+  if (!verifySignature({ signatureHeader, secret, rawBody })) {
+    const resource = typeof payload?.resource === "string" ? payload.resource : "";
+    const fallbackItemId = extractItemId(resource);
+    const fallbackItem = fallbackItemId
+      ? await prisma.inventoryItem.findFirst({
+          where: {
+            mlItemId: {
+              equals: fallbackItemId,
+              mode: "insensitive"
+            }
+          },
+          select: { ownerId: true }
+        })
+      : null;
+
+    await prisma.auditLog.create({
+      data: {
+        action: "ml:webhook",
+        userId: fallbackItem?.ownerId ?? null,
+        metadata: {
+          payload,
+          reason: "signature_invalid",
+          error: "Firma webhook invalida"
+        }
+      }
+    });
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
-  const payload = await req.json().catch(() => null);
+  const safePayload = payload ?? null;
+  if (!safePayload) {
+    await prisma.auditLog.create({
+      data: {
+        action: "ml:webhook",
+        metadata: { error: "payload_invalid" }
+      }
+    });
+    return NextResponse.json({ ok: true });
+  }
   if (!payload) {
     await prisma.auditLog.create({
       data: { action: "ml:webhook", metadata: { error: "payload_invalid" } }
@@ -55,15 +116,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  const topic = typeof payload.topic === "string" ? payload.topic : "";
-  const resource = typeof payload.resource === "string" ? payload.resource : "";
-  const mlUserId = payload.user_id !== undefined && payload.user_id !== null ? String(payload.user_id) : "";
+  const topic = typeof safePayload.topic === "string" ? safePayload.topic : "";
+  const resource = typeof safePayload.resource === "string" ? safePayload.resource : "";
+  const mlUserId = safePayload.user_id !== undefined && safePayload.user_id !== null ? String(safePayload.user_id) : "";
 
   if (!SUPPORTED_TOPICS.has(topic) || !resource || !mlUserId) {
     await prisma.auditLog.create({
       data: {
         action: "ml:webhook",
-        metadata: { payload, reason: "ignored", topic, resource, mlUserId }
+        metadata: { payload: safePayload, reason: "ignored", topic, resource, mlUserId }
       }
     });
     return NextResponse.json({ ok: true });
@@ -74,7 +135,7 @@ export async function POST(req: Request) {
     await prisma.auditLog.create({
       data: {
         action: "ml:webhook",
-        metadata: { payload, reason: "no_item_id", resource }
+        metadata: { payload: safePayload, reason: "no_item_id", resource }
       }
     });
     return NextResponse.json({ ok: true });
@@ -96,7 +157,7 @@ export async function POST(req: Request) {
         action: "ml:webhook",
         userId: fallbackItem?.ownerId ?? null,
         metadata: {
-          payload,
+          payload: safePayload,
           reason: "account_not_found",
           error: "Cuenta de Mercado Libre no vinculada",
           mlUserId,
@@ -125,7 +186,7 @@ export async function POST(req: Request) {
         action: "ml:webhook",
         userId: account.userId,
         metadata: {
-          payload,
+          payload: safePayload,
           itemId,
           status: snapshot?.status ?? null,
           mappedStatus: nextStatus,
@@ -141,7 +202,7 @@ export async function POST(req: Request) {
         action: "ml:webhook",
         userId: account.userId,
         metadata: {
-          payload,
+          payload: safePayload,
           itemId,
           error: error?.message ?? "unknown"
         }
