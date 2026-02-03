@@ -64,10 +64,23 @@ export default function PanelNotifications() {
       const data = await res.json().catch(() => ({}));
       const list: NotificationItem[] = Array.isArray(data.notifications) ? data.notifications : [];
       if (!isMountedRef.current) return;
-      setNotifications(list);
+      const deduped: NotificationItem[] = [];
+      const recentMap = new Map<string, number>();
+      const windowMs = 10 * 60 * 1000;
+      for (const entry of list) {
+        const key = `${entry.itemId ?? ""}:${entry.status ?? ""}`;
+        const ts = new Date(entry.createdAt).getTime();
+        const lastTs = recentMap.get(key);
+        if (lastTs && Math.abs(lastTs - ts) < windowMs) {
+          continue;
+        }
+        recentMap.set(key, ts);
+        deduped.push(entry);
+      }
+      setNotifications(deduped);
 
-      if (list.length) {
-        const newest = list[0];
+      if (deduped.length) {
+        const newest = deduped[0];
         if (!lastNotificationIdRef.current) {
           lastNotificationIdRef.current = newest.id;
           return;
