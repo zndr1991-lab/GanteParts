@@ -531,7 +531,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setTotalItems(typeof data.total === "number" ? data.total : incoming.length);
         setItems((current) => {
           if (!append) {
-            return incoming;
+            if (!updatingIds.length) {
+              return incoming;
+            }
+            const updatingSet = new Set(updatingIds);
+            const currentMap = new Map(current.map((item) => [item.id, item]));
+            return incoming.map((item) =>
+              updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item
+            );
           }
           const existingIds = new Set(current.map((item) => item.id));
           const merged = [...current];
@@ -559,7 +566,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         }
       }
     },
-    [setMessage]
+    [setMessage, updatingIds]
   );
 
   const refresh = useCallback(async () => {
