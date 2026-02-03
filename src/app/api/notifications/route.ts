@@ -24,7 +24,14 @@ function buildMessage(params: {
   if (!status) {
     return `${displayId} se sincronizo`; 
   }
-  const verb = status === "active" ? "se activo" : status === "paused" ? "se pauso" : "cambio de estado";
+  const verb =
+    status === "active"
+      ? "se activo"
+      : status === "paused"
+        ? "se pauso"
+        : status === "inactive"
+          ? "se inactivo"
+          : "cambio de estado";
   return `${displayId} ${verb}`;
 }
 
