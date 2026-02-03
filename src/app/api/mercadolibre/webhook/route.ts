@@ -107,10 +107,18 @@ export async function POST(req: Request) {
     req.headers.get("x-ml-signature") ||
     req.headers.get("x-meli-signature") ||
     req.headers.get("x-meli-signature-v1") ||
+    req.headers.get("x-hub-signature") ||
+    req.headers.get("x-hub-signature-256") ||
     "";
   const secret = process.env.ML_WEBHOOK_SECRET || "";
 
   if (!verifySignature({ signatureHeader, secret, rawBody }) && !verifySignatureFallback({ signatureHeader, secret, rawBody })) {
+    const signatureHeaders: Record<string, string> = {};
+    req.headers.forEach((value, key) => {
+      if (key.toLowerCase().includes("signature")) {
+        signatureHeaders[key] = `${value.slice(0, 16)}...`;
+      }
+    });
     const resource = typeof payload?.resource === "string" ? payload.resource : "";
     const fallbackItemId = extractItemId(resource);
     const fallbackItem = fallbackItemId
@@ -132,7 +140,8 @@ export async function POST(req: Request) {
         metadata: {
           payload,
           reason: "signature_invalid",
-          error: "Firma webhook invalida"
+          error: "Firma webhook invalida",
+          signatureHeaders
         }
       }
     });
