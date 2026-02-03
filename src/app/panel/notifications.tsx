@@ -132,27 +132,29 @@ export default function PanelNotifications() {
 
       {error && <p className="mt-4 text-sm text-rose-300">{error}</p>}
 
-      <div className="mt-5 divide-y divide-slate-800">
-        {notifications.length ? (
-          notifications.slice(0, 6).map((entry) => (
-            <div key={entry.id} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm text-slate-100">{entry.message}</p>
-                <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+      <div className="mt-5 max-h-80 overflow-y-auto pr-2">
+        <div className="divide-y divide-slate-800">
+          {notifications.length ? (
+            notifications.map((entry) => (
+              <div key={entry.id} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-slate-100">{entry.message}</p>
+                  <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                  {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
+                  {entry.status && (
+                    <span className={`rounded-full border px-2 py-0.5 ${statusBadgeClass(entry.status)}`}>
+                      {entry.status}
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
-                {entry.status && (
-                  <span className={`rounded-full border px-2 py-0.5 ${statusBadgeClass(entry.status)}`}>
-                    {entry.status}
-                  </span>
-                )}
-              </div>
-            </div>
-          ))
-        ) : (
-          <p className="py-4 text-sm text-slate-400">Sin notificaciones recientes.</p>
-        )}
+            ))
+          ) : (
+            <p className="py-4 text-sm text-slate-400">Sin notificaciones recientes.</p>
+          )}
+        </div>
       </div>
 
       {toast && (
