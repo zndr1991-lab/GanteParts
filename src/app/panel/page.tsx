@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
+import PanelNotifications from "./notifications";
 
 type Shortcut = {
   href: Route;
@@ -83,6 +84,8 @@ export default async function PanelPage() {
             </a>
           </div>
         </section>
+
+        <PanelNotifications />
 
         <section className="grid gap-4 sm:grid-cols-2">
           {shortcuts.map((shortcut) => (

@@ -82,10 +82,26 @@ export async function POST(req: Request) {
 
   const account = await getMercadoLibreAccountByMlUserId(mlUserId);
   if (!account) {
+    const fallbackItem = await prisma.inventoryItem.findFirst({
+      where: {
+        mlItemId: {
+          equals: itemId,
+          mode: "insensitive"
+        }
+      },
+      select: { ownerId: true }
+    });
     await prisma.auditLog.create({
       data: {
         action: "ml:webhook",
-        metadata: { payload, reason: "account_not_found", mlUserId, itemId }
+        userId: fallbackItem?.ownerId ?? null,
+        metadata: {
+          payload,
+          reason: "account_not_found",
+          error: "Cuenta de Mercado Libre no vinculada",
+          mlUserId,
+          itemId
+        }
       }
     });
     return NextResponse.json({ ok: true });
