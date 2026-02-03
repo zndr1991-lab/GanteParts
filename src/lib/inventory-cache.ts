@@ -2,9 +2,12 @@ import type { InventoryClientItem } from "@/app/inventory/client";
 import { prisma } from "@/lib/prisma";
 import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
 
-const INVENTORY_FULL_LOAD_ENV = Number(process.env.INVENTORY_FULL_LOAD_LIMIT ?? "2000");
+const DEFAULT_SNAPSHOT_LIMIT = 120;
+const INVENTORY_FULL_LOAD_ENV = Number(process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${DEFAULT_SNAPSHOT_LIMIT}`);
 const MAX_CACHE_TAKE =
-  Number.isFinite(INVENTORY_FULL_LOAD_ENV) && INVENTORY_FULL_LOAD_ENV > 0 ? INVENTORY_FULL_LOAD_ENV : 200;
+  Number.isFinite(INVENTORY_FULL_LOAD_ENV) && INVENTORY_FULL_LOAD_ENV > 0
+    ? INVENTORY_FULL_LOAD_ENV
+    : DEFAULT_SNAPSHOT_LIMIT;
 
 export const getInventorySnapshot = async (ownerId: string | null, take: number) => {
   const where = ownerId ? { ownerId } : undefined;
