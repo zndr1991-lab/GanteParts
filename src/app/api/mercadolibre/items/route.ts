@@ -14,7 +14,7 @@ const actionSchema = z.object({
 
 const canManageMercadoLibre = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
-  return normalized === "admin" || normalized === "operator";
+  return normalized === "admin" || normalized === "operator" || normalized === "supervisor";
 };
 
 export async function POST(req: Request) {
@@ -32,8 +32,11 @@ export async function POST(req: Request) {
 
   const { ids, action } = parsed.data;
 
+  const role = (session.user.role ?? "").toLowerCase();
+  const where = role === "viewer" ? { id: { in: ids }, ownerId: session.user.id } : { id: { in: ids } };
+
   const items = await prisma.inventoryItem.findMany({
-    where: { id: { in: ids }, ownerId: session.user.id }
+    where
   });
 
   if (!items.length) {

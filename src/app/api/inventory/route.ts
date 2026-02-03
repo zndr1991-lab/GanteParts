@@ -13,7 +13,7 @@ const MAX_PAGE_SIZE = 120;
 
 const canEditInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
-  return normalized === "admin";
+  return normalized === "admin" || normalized === "supervisor";
 };
 
 const canCreateInventory = (role?: string | null) => {
@@ -39,12 +39,18 @@ const deleteSchema = z.object({
 
 const updateSchema = z.object({
   id: z.string().min(1),
+  skuInternal: z.string().min(1).optional(),
   estatusInterno: z.string().optional().nullable(),
   status: z.enum(["active", "paused", "inactive"]).optional(),
+  forceMlSync: z.boolean().optional(),
   fechaPrestamoPago: z.string().optional().nullable(),
   prestadoVendidoA: z.string().optional().nullable(),
   origen: z.string().optional().nullable(),
   ubicacion: z.string().optional().nullable(),
+  marca: z.string().optional().nullable(),
+  coche: z.string().optional().nullable(),
+  anoDesde: z.string().optional().nullable(),
+  anoHasta: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_ITEM_PHOTOS).optional(),
   price: z.number().nonnegative().nullable().optional(),
   mlItemId: z.string().optional().nullable()
@@ -209,12 +215,18 @@ export async function PATCH(req: Request) {
 
   const {
     id,
+    skuInternal,
     estatusInterno,
     status,
+    forceMlSync,
     fechaPrestamoPago,
     prestadoVendidoA,
     origen,
     ubicacion,
+    marca,
+    coche,
+    anoDesde,
+    anoHasta,
     photos,
     price,
     mlItemId
@@ -261,6 +273,30 @@ export async function PATCH(req: Request) {
     delete nextExtra.ubicacion;
   }
 
+  if (marca && marca.trim()) {
+    nextExtra.marca = marca.trim();
+  } else if (marca === null) {
+    delete nextExtra.marca;
+  }
+
+  if (coche && coche.trim()) {
+    nextExtra.coche = coche.trim();
+  } else if (coche === null) {
+    delete nextExtra.coche;
+  }
+
+  if (anoDesde && anoDesde.trim()) {
+    nextExtra.ano_desde = anoDesde.trim();
+  } else if (anoDesde === null) {
+    delete nextExtra.ano_desde;
+  }
+
+  if (anoHasta && anoHasta.trim()) {
+    nextExtra.ano_hasta = anoHasta.trim();
+  } else if (anoHasta === null) {
+    delete nextExtra.ano_hasta;
+  }
+
   if (photos !== undefined) {
     const sanitized = photos
       .map((photo) => photo.trim())
@@ -283,7 +319,12 @@ export async function PATCH(req: Request) {
     }
   }
 
-  if (status && ["active", "paused"].includes(status) && status !== existing.status) {
+  let mlSyncError: string | null = null;
+  if (
+    status &&
+    ["active", "paused"].includes(status) &&
+    (status !== existing.status || (forceMlSync && status === "active"))
+  ) {
     if (!nextMlItemId) {
       return NextResponse.json({ error: "El registro no tiene codigo de Mercado Libre" }, { status: 400 });
     }
@@ -294,8 +335,7 @@ export async function PATCH(req: Request) {
         await activateItem(session.user.id, nextMlItemId);
       }
     } catch (err: any) {
-      const message = err?.message || "No se pudo sincronizar con Mercado Libre";
-      return NextResponse.json({ error: message }, { status: 502 });
+      mlSyncError = err?.message || "No se pudo sincronizar con Mercado Libre";
     }
   }
 
@@ -305,14 +345,30 @@ export async function PATCH(req: Request) {
     mlItemId: mlItemId !== undefined ? nextMlItemId : undefined
   };
 
+  if (skuInternal !== undefined) {
+    const normalizedSku = skuInternal.trim().toUpperCase();
+    if (!normalizedSku) {
+      return NextResponse.json({ error: "SKU invalido" }, { status: 400 });
+    }
+    updateData.skuInternal = normalizedSku;
+  }
+
   if (price !== undefined) {
     updateData.price = price === null ? null : new Prisma.Decimal(price);
   }
 
-  const item = await prisma.inventoryItem.update({
-    where: { id },
-    data: updateData
-  });
+  let item;
+  try {
+    item = await prisma.inventoryItem.update({
+      where: { id },
+      data: updateData
+    });
+  } catch (err: any) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json({ error: "SKU interno duplicado para este usuario" }, { status: 409 });
+    }
+    throw err;
+  }
 
   await prisma.auditLog.create({
     data: {
@@ -326,11 +382,19 @@ export async function PATCH(req: Request) {
         prestadoVendidoA: prestadoVendidoA ?? null,
         origen: origen ?? null,
         ubicacion: ubicacion ?? null,
+        marca: marca ?? null,
+        coche: coche ?? null,
+        anoDesde: anoDesde ?? null,
+        anoHasta: anoHasta ?? null,
+        skuInternal: skuInternal ?? null,
         price: price ?? null,
         mlItemId: mlItemId ?? null
       }
     }
   });
 
-  return NextResponse.json(serializeInventoryItem(item));
+  return NextResponse.json({
+    ...serializeInventoryItem(item),
+    mlSyncError
+  });
 }

@@ -1,8 +1,5 @@
 "use client";
 
-import { AgGridReact } from "ag-grid-react";
-import "ag-grid-community/styles/ag-grid.css";
-import "ag-grid-community/styles/ag-theme-quartz.css";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_ITEM_PHOTOS } from "@/lib/inventory-serialization";
@@ -18,44 +15,13 @@ type Item = {
   sellerCustomField: string | null;
   extraData?: Record<string, any> | null;
   photoCount?: number;
+  photoPreview?: string | null;
 };
 
 type FocusedInfo = {
   sku: string;
   coche: string;
   ano: string;
-};
-
-type GridApiLite = {
-  stopEditing?: () => void;
-  getFocusedCell?: () => unknown;
-  getSelectedRows?: () => Item[];
-  getDisplayedRowAtIndex?: (index: number) => { data?: Item } | null;
-};
-
-type CellKeyDownHandlerEvent = {
-  api: GridApiLite;
-  event?: {
-    key?: string;
-    preventDefault: () => void;
-  } | null;
-};
-
-type SelectionChangedEventLite = {
-  api: GridApiLite;
-};
-
-type RowSelectedEventLite = {
-  node: {
-    isSelected: () => boolean;
-    data?: Item | null;
-  };
-  api: GridApiLite;
-};
-
-type CellFocusedEventLite = {
-  rowIndex?: number | null;
-  api?: GridApiLite;
 };
 
 type NotificationItem = {
@@ -91,6 +57,8 @@ type PhotoEditorState = {
   title: string;
   dataUrl: string;
 };
+
+type SortKey = "estatusInterno" | "pieza" | "sku" | "status" | "marca" | "coche" | "ano" | "precio";
 
 const brandOptions = [
   "ACURA",
@@ -376,7 +344,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
-  const [gridApi, setGridApi] = useState<any>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const modalPhotoInputRef = useRef<HTMLInputElement | null>(null);
@@ -397,6 +364,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [photoModal, setPhotoModal] = useState<{ id: string; title: string } | null>(null);
   const [modalPhotos, setModalPhotos] = useState<string[]>([]);
   const [photoModalSaving, setPhotoModalSaving] = useState(false);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [sortConfig, setSortConfig] = useState<{
+    key: SortKey;
+    direction: "asc" | "desc";
+  } | null>(null);
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
   const [photoModalLoading, setPhotoModalLoading] = useState(false);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
@@ -415,8 +387,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     manual: true,
     import: true
   });
+  const tableVisibleRows = 10;
+  const tableRowHeight = 56;
+  const tableHeaderHeight = 44;
   const normalizedRole = (userRole ?? "operator").toLowerCase();
-  const canEditInventory = normalizedRole === "admin";
+  const canEditInventory = normalizedRole === "admin" || normalizedRole === "supervisor";
   const canCreateManual = canEditInventory || normalizedRole === "operator" || normalizedRole === "uploader";
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
@@ -1295,18 +1270,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     overridePrestadoVendidoA?: string | null
   ) => {
     const normalized = value.trim().toUpperCase();
+    const current = items.find((it) => it.id === id);
+    const hasMlItem = Boolean(current?.mlItemId);
+    if (!hasMlItem && (normalized === "PRESTADO" || normalized === "ML")) {
+      setMessage("Este registro no tiene código de Mercado Libre; se guardará el estatus interno sin sincronizar.");
+    }
     const nextStatus =
       normalized === "VENDIDO" || normalized === "SIN SUBIR"
         ? "inactive"
         : normalized === "PRESTADO"
-        ? "paused"
+        ? hasMlItem
+          ? "paused"
+          : undefined
         : normalized === "ML"
-        ? "active"
+        ? hasMlItem
+          ? "active"
+          : undefined
         : undefined;
 
     const shouldStampDate = normalized === "PRESTADO" || normalized === "VENDIDO";
     const fechaPrestamoPago = shouldStampDate ? new Date().toISOString() : null;
-    const current = items.find((it) => it.id === id);
     const currentPrestadoVendidoA = current?.extraData?.prestado_vendido_a ?? null;
     const hasOverride = typeof overridePrestadoVendidoA !== "undefined";
     const prestadoVendidoA = hasOverride
@@ -1346,13 +1329,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           id,
           estatusInterno: normalized || null,
           status: nextStatus,
+          forceMlSync: normalized === "ML",
           fechaPrestamoPago,
           prestadoVendidoA
         })
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "No se pudo actualizar");
+      }
+      if (data?.mlSyncError) {
+        setMessage(`Estatus interno guardado, pero ML falló: ${data.mlSyncError}`);
       }
     } catch (err: any) {
       setItems(prevItems);
@@ -1604,6 +1591,271 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [items, selectedIds]);
   const mlActionDisabled = !canManageMercadoLibre || selectedWithMlCount === 0 || mlAction !== null;
 
+  const toggleItemSelection = useCallback((id: string) => {
+    setSelectedIds((current) => {
+      if (current.includes(id)) {
+        return current.filter((value) => value !== id);
+      }
+      return [...current, id];
+    });
+  }, []);
+
+  const updateItemInState = useCallback((id: string, patch: Partial<Item>) => {
+    setItems((current) =>
+      current.map((row) => (row.id === id ? { ...row, ...patch } : row))
+    );
+  }, []);
+
+  const updateExtraDataInState = useCallback((id: string, patch: Record<string, any>) => {
+    setItems((current) =>
+      current.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              extraData: {
+                ...(row.extraData ?? {}),
+                ...patch
+              }
+            }
+          : row
+      )
+    );
+  }, []);
+
+  const getItemYearLabel = useCallback((item: Item) => {
+    const extra = item.extraData ?? {};
+    const hasYear = extra.ano_desde || extra.ano_hasta;
+    return hasYear ? `${extra.ano_desde ?? "-"}-${extra.ano_hasta ?? "-"}` : "-";
+  }, []);
+
+  const getItemPieceName = useCallback((item: Item) => {
+    const extra = item.extraData ?? {};
+    const hasYear = extra.ano_desde || extra.ano_hasta;
+    const yearSegment = hasYear
+      ? extra.ano_desde && extra.ano_hasta && extra.ano_desde !== extra.ano_hasta
+        ? `${extra.ano_desde}-${extra.ano_hasta}`
+        : extra.ano_desde ?? extra.ano_hasta
+      : "";
+    const parts = [extra.pieza, extra.marca, extra.coche, yearSegment, item.skuInternal]
+      .map((part) => (part ?? "").toString().trim())
+      .filter((part) => part.length);
+    return parts.length ? parts.join(" ") : item.title || "-";
+  }, []);
+
+  const toggleSort = useCallback((key: SortKey) => {
+    setSortConfig((current) => {
+      if (!current || current.key !== key) {
+        return { key, direction: "asc" };
+      }
+      if (current.direction === "asc") {
+        return { key, direction: "desc" };
+      }
+      return null;
+    });
+  }, []);
+
+  const getSortIndicator = useCallback(
+    (key: SortKey) => {
+      if (!sortConfig || sortConfig.key !== key) return "↕";
+      return sortConfig.direction === "asc" ? "↑" : "↓";
+    },
+    [sortConfig]
+  );
+
+  const handleEstatusInternoChange = useCallback(
+    (item: Item, nextValue: string) => {
+      if (!canEditInventory) return;
+      const val = nextValue.toString().trim().toUpperCase();
+      const currentBuyer = (item.extraData?.prestado_vendido_a ?? "").toString();
+      let overrideBuyer: string | null | undefined = undefined;
+
+      if (val === "VENDIDO" || val === "PRESTADO") {
+        const question = val === "VENDIDO" ? "¿A quien se vendio?" : "¿A quien se presto?";
+        const errorText = val === "VENDIDO" ? "Debes indicar a quien se vendio" : "Debes indicar a quien se presto";
+        const response = window.prompt(question, currentBuyer);
+        if (response === null) {
+          setMessage("Actualizacion cancelada");
+          return;
+        }
+        const cleaned = response.trim();
+        if (!cleaned.length) {
+          setMessage(errorText);
+          return;
+        }
+        overrideBuyer = cleaned.toUpperCase();
+      }
+
+      updateExtraDataInState(item.id, {
+        estatus_interno: val || undefined,
+        ...(overrideBuyer !== undefined ? { prestado_vendido_a: overrideBuyer || undefined } : {})
+      });
+      updateEstatusInterno(item.id, val, overrideBuyer);
+    },
+    [canEditInventory, updateEstatusInterno, updateExtraDataInState]
+  );
+
+  const handleOrigenChange = useCallback(
+    (item: Item, nextValue: string) => {
+      if (!canEditInventory) return;
+      const val = nextValue.toString().trim().toUpperCase();
+      updateExtraDataInState(item.id, { origen: val || undefined });
+      updateOrigen(item.id, val);
+    },
+    [canEditInventory, updateExtraDataInState, updateOrigen]
+  );
+
+  const handleUbicacionBlur = useCallback(
+    (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const val = rawValue.toString().trim().toUpperCase();
+      updateExtraDataInState(item.id, { ubicacion: val || undefined });
+      updateUbicacion(item.id, val);
+    },
+    [canEditInventory, updateExtraDataInState, updateUbicacion]
+  );
+
+  const handleMlItemBlur = useCallback(
+    (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const val = rawValue.toString().trim();
+      updateItemInState(item.id, { mlItemId: val || null });
+      updateMlItemId(item.id, val);
+    },
+    [canEditInventory, updateItemInState, updateMlItemId]
+  );
+
+  const handlePriceBlur = useCallback(
+    (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const trimmed = rawValue.toString().replace(/[$,\s]/g, "").trim();
+      if (!trimmed.length) {
+        updateItemInState(item.id, { price: null });
+        updatePrice(item.id, null);
+        return;
+      }
+      const priceValue = Number(trimmed);
+      if (Number.isNaN(priceValue) || priceValue < 0) {
+        setMessage("Precio invalido");
+        return;
+      }
+      updateItemInState(item.id, { price: priceValue });
+      updatePrice(item.id, priceValue);
+    },
+    [canEditInventory, updateItemInState, updatePrice]
+  );
+
+  const handleSkuBlur = useCallback(
+    async (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const trimmed = rawValue.toString().trim().toUpperCase();
+      if (!trimmed.length) {
+        setMessage("SKU invalido");
+        return;
+      }
+      const prevValue = item.skuInternal;
+      updateItemInState(item.id, { skuInternal: trimmed });
+      try {
+        const res = await fetch("/api/inventory", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: item.id, skuInternal: trimmed })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "No se pudo actualizar el SKU");
+        }
+      } catch (err: any) {
+        updateItemInState(item.id, { skuInternal: prevValue });
+        setMessage(err?.message || "No se pudo actualizar el SKU");
+      }
+    },
+    [canEditInventory, updateItemInState]
+  );
+
+  const handleMarcaBlur = useCallback(
+    async (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const trimmed = rawValue.toString().trim().toUpperCase();
+      updateExtraDataInState(item.id, { marca: trimmed || undefined });
+      try {
+        const res = await fetch("/api/inventory", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: item.id, marca: trimmed || null })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "No se pudo actualizar la marca");
+        }
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo actualizar la marca");
+      }
+    },
+    [canEditInventory, updateExtraDataInState]
+  );
+
+  const handleCocheBlur = useCallback(
+    async (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const trimmed = rawValue.toString().trim().toUpperCase();
+      updateExtraDataInState(item.id, { coche: trimmed || undefined });
+      try {
+        const res = await fetch("/api/inventory", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: item.id, coche: trimmed || null })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "No se pudo actualizar el coche");
+        }
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo actualizar el coche");
+      }
+    },
+    [canEditInventory, updateExtraDataInState]
+  );
+
+  const handleAnoBlur = useCallback(
+    async (item: Item, rawValue: string) => {
+      if (!canEditInventory) return;
+      const normalized = rawValue.toString().trim();
+      if (!normalized.length) {
+        updateExtraDataInState(item.id, { ano_desde: undefined, ano_hasta: undefined });
+        try {
+          await fetch("/api/inventory", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: item.id, anoDesde: null, anoHasta: null })
+          });
+        } catch (err: any) {
+          setMessage(err?.message || "No se pudo actualizar el año");
+        }
+        return;
+      }
+
+      const match = normalized.match(/(\d{2,4})(?:\D+(\d{2,4}))?/);
+      const from = match?.[1] ? match[1] : normalized;
+      const to = match?.[2] ? match[2] : match?.[1] ?? normalized;
+      updateExtraDataInState(item.id, { ano_desde: from, ano_hasta: to });
+
+      try {
+        const res = await fetch("/api/inventory", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: item.id, anoDesde: from, anoHasta: to })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "No se pudo actualizar el año");
+        }
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo actualizar el año");
+      }
+    },
+    [canEditInventory, updateExtraDataInState]
+  );
+
   const normalizedSearch = search.trim().toLowerCase();
   const searchFilteredItems = useMemo(() => {
     if (!normalizedSearch) return items;
@@ -1639,13 +1891,70 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
   const filteredItems = useMemo(() => {
-    if (!normalizedStatusFilter) return searchFilteredItems;
-    return searchFilteredItems.filter((item) => {
-      const current = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
-      const label = current.length ? current : "SIN ESTATUS";
-      return label === normalizedStatusFilter;
+    const filtered = normalizedStatusFilter
+      ? searchFilteredItems.filter((item) => {
+          const current = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+          const label = current.length ? current : "SIN ESTATUS";
+          return label === normalizedStatusFilter;
+        })
+      : searchFilteredItems;
+
+    if (!sortConfig) return filtered;
+
+    const sorted = [...filtered].sort((a, b) => {
+      const extraA = a.extraData ?? {};
+      const extraB = b.extraData ?? {};
+      const direction = sortConfig.direction === "asc" ? 1 : -1;
+      let left = "";
+      let right = "";
+      let numericCompare = false;
+
+      switch (sortConfig.key) {
+        case "estatusInterno":
+          left = ((extraA.estatus_interno ?? "").toString().trim() || "SIN ESTATUS").toLowerCase();
+          right = ((extraB.estatus_interno ?? "").toString().trim() || "SIN ESTATUS").toLowerCase();
+          break;
+        case "pieza":
+          left = getItemPieceName(a).toLowerCase();
+          right = getItemPieceName(b).toLowerCase();
+          break;
+        case "sku":
+          left = (a.skuInternal ?? "").toString().toLowerCase();
+          right = (b.skuInternal ?? "").toString().toLowerCase();
+          break;
+        case "status":
+          left = (a.status ?? "").toString().toLowerCase();
+          right = (b.status ?? "").toString().toLowerCase();
+          break;
+        case "marca":
+          left = (extraA.marca ?? "").toString().toLowerCase();
+          right = (extraB.marca ?? "").toString().toLowerCase();
+          break;
+        case "coche":
+          left = (extraA.coche ?? "").toString().toLowerCase();
+          right = (extraB.coche ?? "").toString().toLowerCase();
+          break;
+        case "ano":
+          left = getItemYearLabel(a).toLowerCase();
+          right = getItemYearLabel(b).toLowerCase();
+          break;
+        case "precio":
+          numericCompare = true;
+          break;
+      }
+
+      if (numericCompare) {
+        const leftNum = a.price ?? 0;
+        const rightNum = b.price ?? 0;
+        return (leftNum - rightNum) * direction;
+      }
+
+      if (left === right) return 0;
+      return left.localeCompare(right, "es") * direction;
     });
-  }, [searchFilteredItems, normalizedStatusFilter]);
+
+    return sorted;
+  }, [searchFilteredItems, normalizedStatusFilter, sortConfig, getItemPieceName, getItemYearLabel]);
 
   const statusCounters = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -1662,462 +1971,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     });
   }, [items]);
 
-  const rowClassRules = useMemo(
-    () => ({
-      "row-vendido": (params: any) =>
-        (params.data?.extraData?.estatus_interno ?? "").toString().toUpperCase() === "VENDIDO",
-      "row-prestado": (params: any) =>
-        (params.data?.extraData?.estatus_interno ?? "").toString().toUpperCase() === "PRESTADO"
-    }),
-    []
-  );
-
-  const handleCellKeyDown = useCallback((event: CellKeyDownHandlerEvent) => {
-    if (event.event?.key === "Enter") {
-      event.api.stopEditing?.();
-      event.event?.preventDefault();
-    }
-  }, []);
-
-  const handleSelectionChanged = useCallback((event: SelectionChangedEventLite) => {
-    const rows = (event.api.getSelectedRows?.() ?? []) as Item[];
-    setSelectedIds(rows.map((row) => row.id));
-    if (!rows.length && !event.api.getFocusedCell?.()) {
-      setFocusedRowInfo(null);
-    }
-  }, []);
-
-  const handleRowSelected = useCallback((event: RowSelectedEventLite) => {
-    if (event.node.isSelected() && event.node.data) {
-      setFocusedRowInfo(toFocusedInfo(event.node.data as Item));
-      return;
-    }
-    if (!event.api.getFocusedCell?.() && (event.api.getSelectedRows?.().length ?? 0) === 0) {
-      setFocusedRowInfo(null);
-    }
-  }, []);
-
-  const handleCellFocused = useCallback((event: CellFocusedEventLite) => {
-    if (event.rowIndex == null || event.rowIndex < 0) {
-      setFocusedRowInfo(null);
-      return;
-    }
-    const data = event.api?.getDisplayedRowAtIndex?.(event.rowIndex)?.data as Item | undefined;
-    setFocusedRowInfo(toFocusedInfo(data));
-  }, []);
-
-  const defaultColDef = useMemo(
-    () => ({
-      resizable: true,
-      sortable: true,
-      filter: true,
-      minWidth: 120
-    }),
-    []
-  );
-
-  const columnDefs = useMemo(
-    () => [
-    {
-      headerName: "Sel",
-      checkboxSelection: true,
-      headerCheckboxSelection: true,
-      maxWidth: 50,
-      pinned: "left",
-      lockPosition: true,
-      filter: false,
-      sortable: false
-    },
-    {
-      headerName: "Estatus",
-      field: "status",
-      valueFormatter: (p: any) => p.value ?? "-",
-      maxWidth: 120
-    },
-    {
-      headerName: "Estatus interno",
-      editable: canEditInventory,
-      cellEditor: "agSelectCellEditor",
-      cellEditorParams: {
-        values: sortedEstatusInternoOptions
-      },
-      cellEditorPopup: true,
-      valueGetter: (p: any) => p.data.extraData?.estatus_interno ?? "",
-      cellRenderer: (p: any) => (
-        <span className="block text-xs text-black w-full leading-5 truncate">{p.value || "-"}</span>
-      ),
-      cellStyle: {
-        display: "flex",
-        alignItems: "center",
-        padding: "0 8px"
-      },
-      onCellClicked: (p: any) => {
-        if (!canEditInventory) return;
-        p.api.startEditingCell({ rowIndex: p.rowIndex, colKey: p.column.getId() });
-      },
-      valueSetter: (p: any) => {
-        const val = (p.newValue ?? "").toString().toUpperCase();
-        const existingBuyer = (p.data.extraData?.prestado_vendido_a ?? "").toString();
-        let overrideBuyer: string | null | undefined = undefined;
-
-        if (val === "VENDIDO" || val === "PRESTADO") {
-          const question = val === "VENDIDO" ? "¿A quien se vendio?" : "¿A quien se presto?";
-          const errorText = val === "VENDIDO" ? "Debes indicar a quien se vendio" : "Debes indicar a quien se presto";
-          const response = window.prompt(question, existingBuyer);
-          if (response === null) {
-            setMessage("Actualizacion cancelada");
-            return false;
-          }
-          const cleaned = response.trim();
-          if (!cleaned.length) {
-            setMessage(errorText);
-            return false;
-          }
-          overrideBuyer = cleaned.toUpperCase();
-        }
-
-        const nextExtra = {
-          ...(p.data.extraData ?? {}),
-          estatus_interno: val,
-          ...(overrideBuyer !== undefined ? { prestado_vendido_a: overrideBuyer || undefined } : {})
-        };
-
-        p.data.extraData = nextExtra;
-        setItems((curr) =>
-          curr.map((row) =>
-            row.id === p.data.id
-              ? {
-                  ...row,
-                  extraData: {
-                    ...(row.extraData ?? {}),
-                    estatus_interno: val,
-                    ...(overrideBuyer !== undefined
-                      ? { prestado_vendido_a: overrideBuyer || undefined }
-                      : {})
-                  }
-                }
-              : row
-          )
-        );
-        updateEstatusInterno(p.data.id, val, overrideBuyer);
-        return true;
-      },
-      maxWidth: 170
-    },
-    {
-      headerName: "SKU",
-      field: "skuInternal",
-      maxWidth: 140
-    },
-    {
-      headerName: "Descripcion",
-      valueGetter: (p: any) => {
-        const extra = p.data.extraData ?? {};
-        const yearSegment = extra.ano_desde || extra.ano_hasta
-          ? extra.ano_desde && extra.ano_hasta && extra.ano_desde !== extra.ano_hasta
-            ? `${extra.ano_desde}-${extra.ano_hasta}`
-            : extra.ano_desde ?? extra.ano_hasta
-          : "";
-        const parts = [extra.pieza, extra.marca, extra.coche, yearSegment, p.data.skuInternal]
-          .map((part) => (part ?? "").toString().trim())
-          .filter((part) => part.length);
-        return parts.length ? parts.join(" ") : "-";
-      },
-      minWidth: 220
-    },
-    {
-      headerName: "Descripcion ML",
-      valueGetter: (p: any) => p.data.extraData?.descripcion_ml ?? "-",
-      minWidth: 220
-    },
-    {
-      headerName: "Stock",
-      field: "stock",
-      maxWidth: 100,
-      filter: "agNumberColumnFilter",
-      cellStyle: { textAlign: "right" }
-    },
-    {
-      headerName: "Pieza",
-      valueGetter: (p: any) => p.data.extraData?.pieza ?? "-",
-      maxWidth: 150
-    },
-    {
-      headerName: "Marca",
-      valueGetter: (p: any) => p.data.extraData?.marca ?? "-",
-      maxWidth: 140
-    },
-    {
-      headerName: "Coche",
-      valueGetter: (p: any) => p.data.extraData?.coche ?? "-",
-      maxWidth: 160
-    },
-    {
-      headerName: "Año",
-      valueGetter: (p: any) =>
-        p.data.extraData?.ano_desde || p.data.extraData?.ano_hasta
-          ? `${p.data.extraData?.ano_desde ?? "-"}-${p.data.extraData?.ano_hasta ?? "-"}`
-          : "-",
-      maxWidth: 130,
-      filter: "agNumberColumnFilter"
-    },
-    {
-      headerName: "Origen",
-      editable: canEditInventory,
-      cellEditor: "agSelectCellEditor",
-      cellEditorParams: {
-        values: sortedOrigenOptions
-      },
-      valueGetter: (p: any) => p.data.extraData?.origen ?? "",
-      valueSetter: (p: any) => {
-        const val = (p.newValue ?? "").toString().toUpperCase();
-        const nextExtra = {
-          ...(p.data.extraData ?? {}),
-          origen: val
-        };
-        p.data.extraData = nextExtra;
-        setItems((curr) =>
-          curr.map((row) =>
-            row.id === p.data.id
-              ? {
-                  ...row,
-                  extraData: {
-                    ...(row.extraData ?? {}),
-                    origen: val
-                  }
-                }
-              : row
-          )
-        );
-        updateOrigen(p.data.id, val);
-        return true;
-      },
-      maxWidth: 160
-    },
-    {
-      headerName: "Precio",
-      field: "price",
-      editable: canEditInventory,
-      valueFormatter: (p: any) => formatCurrencyMx(p.value),
-      valueSetter: (p: any) => {
-        const raw = (p.newValue ?? "").toString();
-        const trimmed = raw.replace(/[$,\s]/g, "").trim();
-        if (!trimmed.length) {
-          p.data.price = null;
-          updatePrice(p.data.id, null);
-          return true;
-        }
-        const priceValue = Number(trimmed);
-        if (Number.isNaN(priceValue) || priceValue < 0) {
-          setMessage("Precio invalido");
-          return false;
-        }
-        p.data.price = priceValue;
-        updatePrice(p.data.id, priceValue);
-        return true;
-      },
-      maxWidth: 130,
-      cellStyle: { textAlign: "right", paddingRight: "12px" }
-    },
-    {
-      headerName: "Precio de compra",
-      valueGetter: (p: any) => p.data.extraData?.precio_compra ?? null,
-      valueFormatter: (p: any) => formatCurrencyMx(p.value),
-      maxWidth: 150,
-      filter: "agNumberColumnFilter",
-      cellStyle: { textAlign: "right" }
-    },
-    {
-      headerName: "Ubicacion",
-      editable: canEditInventory,
-      valueGetter: (p: any) => p.data.extraData?.ubicacion ?? "",
-      valueSetter: (p: any) => {
-        const val = (p.newValue ?? "").toString().toUpperCase();
-        const nextExtra = {
-          ...(p.data.extraData ?? {}),
-          ubicacion: val
-        };
-        p.data.extraData = nextExtra;
-        setItems((curr) =>
-          curr.map((row) =>
-            row.id === p.data.id
-              ? {
-                  ...row,
-                  extraData: {
-                    ...(row.extraData ?? {}),
-                    ubicacion: val
-                  }
-                }
-              : row
-          )
-        );
-        updateUbicacion(p.data.id, val);
-        return true;
-      },
-      maxWidth: 140
-    },
-    {
-      headerName: "Codigo de Mercado Libre",
-      field: "mlItemId",
-      editable: canEditInventory,
-      valueFormatter: (p: any) => (p.value && p.value.length ? p.value : "-"),
-      valueSetter: (p: any) => {
-        updateMlItemId(p.data.id, (p.newValue ?? "").toString());
-        return true;
-      },
-      maxWidth: 200
-    },
-    {
-      headerName: "Prestado a/Vendido a",
-      editable: canEditInventory,
-      valueGetter: (p: any) => p.data.extraData?.prestado_vendido_a ?? "",
-      valueSetter: (p: any) => {
-        const val = (p.newValue ?? "").toString().toUpperCase();
-        setItems((curr) =>
-          curr.map((row) =>
-            row.id === p.data.id
-              ? {
-                  ...row,
-                  extraData: {
-                    ...(row.extraData ?? {}),
-                    prestado_vendido_a: val
-                  }
-                }
-              : row
-          )
-        );
-        updatePrestadoVendidoA(p.data.id, val);
-        return true;
-      },
-      minWidth: 180
-    },
-    {
-      headerName: "Fecha de ingreso",
-      valueGetter: (p: any) => p.data.extraData?.fecha_ingreso ?? "",
-      valueFormatter: (p: any) => (p.value ? formatDate(p.value) : "-"),
-      maxWidth: 150,
-      editable: false
-    },
-    {
-      headerName: "Fecha prestamo",
-      valueGetter: (p: any) => p.data.extraData?.fecha_prestamo_pago ?? "",
-      valueFormatter: (p: any) => (p.value ? formatDate(p.value) : "-"),
-      maxWidth: 170,
-      editable: false
-    },
-    {
-      headerName: "Facebook",
-      valueGetter: (p: any) => p.data.extraData?.facebook ?? "-",
-      maxWidth: 140
-    },
-    {
-      headerName: "Inventario",
-      valueGetter: (p: any) => p.data.extraData?.inventario ?? "-",
-      maxWidth: 140
-    },
-    {
-      headerName: "Revision",
-      valueGetter: (p: any) => p.data.extraData?.revision ?? "-",
-      maxWidth: 140
-    },
-    {
-      headerName: "Descripcion local",
-      valueGetter: (p: any) => {
-        const base = (p.data.extraData?.descripcion_local ?? "").toString().trim();
-        const origen = (p.data.extraData?.origen ?? "").toString().trim().toUpperCase();
-        if (origen === "NUEVO ORIGINAL") {
-          const prefix = base ? `${base}\n\n` : "";
-          return `${prefix}${nuevoOriginalDescripcion}`;
-        }
-        if (origen === "NUEVO ORIGINAL CON DETALLE") {
-          const prefix = base ? `${base}\n\n` : "";
-          return `${prefix}${nuevoOriginalDetalleDescripcion}`;
-        }
-        if (origen === "TW/GENERICO") {
-          const prefix = base ? `${base}\n\n` : "";
-          return `${prefix}${twGenericoDescripcion}`;
-        }
-        if (origen === "TW/GENERICO CON DETALLE") {
-          const prefix = base ? `${base}\n\n` : "";
-          return `${prefix}${twGenericoDetalleDescripcion}`;
-        }
-        if (origen === "USADO ORIGINAL SANO") {
-          const prefix = base ? `${base}\n\n` : "";
-          return `${prefix}${usadoOriginalSanoDescripcion}`;
-        }
-        if (origen === "USADO ORIGINAL CON DETALLE") {
-          const prefix = base ? `${base}\n\n` : "";
-          return `${prefix}${usadoOriginalDetalleDescripcion}`;
-        }
-        return base || "-";
-      },
-      minWidth: 200
-    },
-    {
-      headerName: "Codigo universal",
-      field: "sellerCustomField",
-      maxWidth: 160
-    },
-    {
-      headerName: "Fotos",
-      valueGetter: (p: any) => (typeof p.data.photoCount === "number" ? p.data.photoCount : 0),
-      cellRenderer: (p: any) => {
-        const count = typeof p.value === "number" ? p.value : 0;
-        if (!canEditInventory) {
-          return (
-            <span className="text-xs text-slate-400">
-              {count ? `${count} ${count === 1 ? "foto" : "fotos"}` : "Sin fotos"}
-            </span>
-          );
-        }
-        return (
-          <button
-            type="button"
-            className="text-xs text-teal-300 hover:text-teal-200 underline underline-offset-2"
-            onClick={() => openPhotoModal(p.data)}
-          >
-            {count ? `Ver/editar (${count})` : "Agregar fotos"}
-          </button>
-        );
-      },
-      minWidth: 140,
-      sortable: false,
-      filter: false
-    },
-    {
-      headerName: "Acciones",
-      cellRenderer: (p: any) => {
-        if (!canEditInventory) {
-          return <span className="text-xs text-slate-500">-</span>;
-        }
-        return (
-          <button
-            type="button"
-            className="text-red-300 hover:text-red-200 text-xs"
-            onClick={() => requestDeleteAuthorization([p.data.id])}
-          >
-            Borrar
-          </button>
-        );
-      },
-      width: 90,
-      pinned: "right",
-      filter: false,
-      sortable: false
-    }
-    ],
-    [
-      canEditInventory,
-      openPhotoModal,
-      requestDeleteAuthorization,
-      updateEstatusInterno,
-      updateOrigen,
-      updatePrestadoVendidoA,
-      updatePrice,
-      updateUbicacion,
-      updateMlItemId
-    ]
-  );
+  
 
   return (
     <>
@@ -2732,32 +2586,448 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             <p className="text-xs text-amber-300">Actualizando inventario...</p>
           )}
           <div
-            className="ag-theme-quartz rounded-xl border border-slate-700 shadow-inner"
-            style={{ height: isMobile ? 520 : 600 }}
+            className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
+            style={{ maxHeight: tableHeaderHeight + tableVisibleRows * tableRowHeight }}
           >
-            <AgGridReact
-              rowData={filteredItems}
-              columnDefs={columnDefs}
-              defaultColDef={defaultColDef}
-              getRowId={(params: any) => params.data.id}
-              onGridReady={(event: any) => setGridApi(event.api)}
-              rowHeight={28}
-              headerHeight={34}
-              rowSelection="multiple"
-              rowDeselection={false}
-              suppressRowClickSelection
-              readOnlyEdit={!canEditInventory}
-              enableCellTextSelection={true}
-              enableRangeSelection
-              animateRows
-              copyHeadersToClipboard
-              quickFilterText={search}
-              onCellKeyDown={handleCellKeyDown}
-              onCellFocused={handleCellFocused}
-              onRowSelected={handleRowSelected}
-              onSelectionChanged={handleSelectionChanged}
-              rowClassRules={rowClassRules}
-            />
+            {filteredItems.length === 0 ? (
+              <div className="p-8 text-center text-sm text-slate-400">
+                No hay registros que coincidan con el filtro aplicado.
+              </div>
+            ) : (
+              <table className="min-w-[1100px] w-full border-collapse text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-900/90 text-xs font-semibold uppercase tracking-widest text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Sel</th>
+                    <th className="px-4 py-3 text-left">Editar</th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>Estatus interno</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("estatusInterno")}
+                        >
+                          {getSortIndicator("estatusInterno")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>Pieza</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("pieza")}
+                        >
+                          {getSortIndicator("pieza")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">Fotos</th>
+                    <th className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span>Precio</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("precio")}
+                        >
+                          {getSortIndicator("precio")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>SKU</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("sku")}
+                        >
+                          {getSortIndicator("sku")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">Codigo ML</th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>Estatus</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("status")}
+                        >
+                          {getSortIndicator("status")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">Descripcion</th>
+                    <th className="px-4 py-3 text-left">Descripcion ML</th>
+                    <th className="px-4 py-3 text-left">Descripcion local</th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>Marca</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("marca")}
+                        >
+                          {getSortIndicator("marca")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>Coche</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("coche")}
+                        >
+                          {getSortIndicator("coche")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">
+                      <div className="flex items-center gap-2">
+                        <span>Año</span>
+                        <button
+                          type="button"
+                          className="text-[10px] text-slate-300 hover:text-amber-200"
+                          onClick={() => toggleSort("ano")}
+                        >
+                          {getSortIndicator("ano")}
+                        </button>
+                      </div>
+                    </th>
+                    <th className="px-4 py-3 text-left">Origen</th>
+                    <th className="px-4 py-3 text-left">Ubicacion</th>
+                    <th className="px-4 py-3 text-left">Prestado/Vendido a</th>
+                    <th className="px-4 py-3 text-left">Fecha ingreso</th>
+                    <th className="px-4 py-3 text-left">Fecha prestamo</th>
+                    <th className="px-4 py-3 text-left">Facebook</th>
+                    <th className="px-4 py-3 text-left">Inventario</th>
+                    <th className="px-4 py-3 text-left">Revision</th>
+                    <th className="px-4 py-3 text-left">Codigo universal</th>
+                    <th className="px-4 py-3 text-right">Stock</th>
+                    <th className="px-4 py-3 text-right">Precio compra</th>
+                    <th className="px-4 py-3 text-left">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredItems.map((item) => {
+                    const extra = item.extraData ?? {};
+                    const internalStatusRaw = (extra.estatus_interno ?? "").toString().trim();
+                    const internalStatus = internalStatusRaw.length ? internalStatusRaw.toUpperCase() : "SIN ESTATUS";
+                    const yearLabel = getItemYearLabel(item);
+                    const pieceName = getItemPieceName(item);
+                    const isSelected = selectedIds.includes(item.id);
+                    const isEditing = editingRowId === item.id;
+                    const rowStatusClass = internalStatus === "VENDIDO"
+                      ? "bg-rose-950/40"
+                      : internalStatus === "PRESTADO"
+                      ? "bg-sky-950/40"
+                      : "";
+                    const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
+                    const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`h-14 border-t border-slate-900/80 bg-slate-900/30 transition hover:bg-slate-900/70 ${rowStatusClass}`}
+                        onClick={() => setFocusedRowInfo(toFocusedInfo(item))}
+                      >
+                        <td className="whitespace-nowrap px-4 py-3 align-middle">
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-400 focus:ring-amber-400"
+                              checked={isSelected}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                toggleItemSelection(item.id);
+                              }}
+                            />
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 align-middle text-xs">
+                          {canEditInventory ? (
+                            <button
+                              type="button"
+                              className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                                isEditing
+                                  ? "border-emerald-400/70 bg-emerald-500/10 text-emerald-200"
+                                  : "border-amber-400/60 text-amber-200 hover:border-amber-300"
+                              }`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setEditingRowId((current) => (current === item.id ? null : item.id));
+                              }}
+                            >
+                              {isEditing ? "Listo" : "Editar"}
+                            </button>
+                          ) : (
+                            <span className="text-slate-500">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-xs font-semibold text-slate-100">
+                          {canEditInventory ? (
+                            <select
+                              value={internalStatusRaw}
+                              onChange={(event) => handleEstatusInternoChange(item, event.target.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                            >
+                              <option value="">SIN ESTATUS</option>
+                              {sortedEstatusInternoOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            internalStatus
+                          )}
+                        </td>
+                        <td className="min-w-[220px] px-4 py-3 align-top">
+                          <div className="font-semibold text-white">{pieceName}</div>
+                          {extra.ubicacion && (
+                            <div className="text-xs text-slate-500">Ubicacion: {extra.ubicacion}</div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-xs">
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              className="h-12 w-12 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (canEditInventory) {
+                                  openPhotoModal(item);
+                                }
+                              }}
+                              disabled={!canEditInventory}
+                            >
+                              {photosCount ? "Ver" : "Sin"}
+                            </button>
+                            <div className="text-xs text-slate-400">
+                              {photosCount ? `${photosCount} fotos` : "Sin fotos"}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right align-middle font-bold text-emerald-300">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={item.price != null ? String(item.price) : ""}
+                              onBlur={(event) => handlePriceBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-emerald-200 text-right focus:border-amber-400 focus:outline-none"
+                              placeholder="$"
+                            />
+                          ) : item.price != null ? (
+                            formatCurrencyMx(item.price)
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 align-middle">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={(item.skuInternal ?? "").toString()}
+                              onBlur={(event) => handleSkuBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-amber-200 focus:border-amber-400 focus:outline-none"
+                              placeholder="SKU"
+                            />
+                          ) : (
+                            <div className="flex flex-col">
+                              <span className="font-mono text-sm text-amber-200">{item.skuInternal || "-"}</span>
+                              <span className="text-[11px] text-slate-500">{item.status || "-"}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-xs">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={(item.mlItemId ?? "").toString()}
+                              onBlur={(event) => handleMlItemBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                              placeholder="ML ID"
+                            />
+                          ) : (
+                            <span className="text-slate-200">{item.mlItemId || "-"}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">{item.status || "-"}</td>
+                        <td className="min-w-[240px] px-4 py-3 align-top text-slate-100">
+                          <div className="max-w-[320px] truncate">{pieceName}</div>
+                        </td>
+                        <td className="min-w-[220px] px-4 py-3 align-top text-slate-100">
+                          <div className="max-w-[320px] truncate">{extra.descripcion_ml ?? "-"}</div>
+                        </td>
+                        <td className="min-w-[220px] px-4 py-3 align-top text-slate-100">
+                          <div className="max-w-[320px] truncate">{(() => {
+                            const base = (extra.descripcion_local ?? "").toString().trim();
+                            const origen = (extra.origen ?? "").toString().trim().toUpperCase();
+                            if (origen === "NUEVO ORIGINAL") {
+                              const prefix = base ? `${base}\n\n` : "";
+                              return `${prefix}${nuevoOriginalDescripcion}`;
+                            }
+                            if (origen === "NUEVO ORIGINAL CON DETALLE") {
+                              const prefix = base ? `${base}\n\n` : "";
+                              return `${prefix}${nuevoOriginalDetalleDescripcion}`;
+                            }
+                            if (origen === "TW/GENERICO") {
+                              const prefix = base ? `${base}\n\n` : "";
+                              return `${prefix}${twGenericoDescripcion}`;
+                            }
+                            if (origen === "TW/GENERICO CON DETALLE") {
+                              const prefix = base ? `${base}\n\n` : "";
+                              return `${prefix}${twGenericoDetalleDescripcion}`;
+                            }
+                            if (origen === "USADO ORIGINAL SANO") {
+                              const prefix = base ? `${base}\n\n` : "";
+                              return `${prefix}${usadoOriginalSanoDescripcion}`;
+                            }
+                            if (origen === "USADO ORIGINAL CON DETALLE") {
+                              const prefix = base ? `${base}\n\n` : "";
+                              return `${prefix}${usadoOriginalDetalleDescripcion}`;
+                            }
+                            return base || "-";
+                          })()}</div>
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={(extra.marca ?? "").toString()}
+                              onBlur={(event) => handleMarcaBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                              placeholder="Marca"
+                            />
+                          ) : (
+                            extra.marca ?? "-"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={(extra.coche ?? "").toString()}
+                              onBlur={(event) => handleCocheBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                              placeholder="Coche"
+                            />
+                          ) : (
+                            extra.coche ?? "-"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={
+                                extra.ano_desde || extra.ano_hasta
+                                  ? `${extra.ano_desde ?? ""}-${extra.ano_hasta ?? ""}`
+                                  : ""
+                              }
+                              onBlur={(event) => handleAnoBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                              placeholder="Año"
+                            />
+                          ) : (
+                            yearLabel
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {canEditInventory && isEditing ? (
+                            <select
+                              value={(extra.origen ?? "").toString()}
+                              onChange={(event) => handleOrigenChange(item, event.target.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                            >
+                              <option value="">-</option>
+                              {sortedOrigenOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            extra.origen ?? "-"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {canEditInventory && isEditing ? (
+                            <input
+                              type="text"
+                              defaultValue={(extra.ubicacion ?? "").toString()}
+                              onBlur={(event) => handleUbicacionBlur(item, event.currentTarget.value)}
+                              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                              placeholder="Ubicacion"
+                            />
+                          ) : (
+                            extra.ubicacion ?? "-"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {extra.prestado_vendido_a ?? "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {extra.fecha_ingreso ? formatDate(extra.fecha_ingreso) : "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {extra.fecha_prestamo_pago ? formatDate(extra.fecha_prestamo_pago) : "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {extra.facebook ?? "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {extra.inventario ?? "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {extra.revision ?? "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          {item.sellerCustomField ?? "-"}
+                        </td>
+                        <td className="px-4 py-3 text-right align-middle font-semibold text-slate-100">{item.stock}</td>
+                        <td className="px-4 py-3 text-right align-middle font-semibold text-slate-100">
+                          {extra.precio_compra != null ? formatCurrencyMx(extra.precio_compra) : "-"}
+                        </td>
+                        <td className="px-4 py-3 align-middle text-xs">
+                          {canEditInventory ? (
+                            <div className="flex flex-col gap-2">
+                              <button
+                                type="button"
+                                className="rounded-md border border-amber-400/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setEditingRowId((current) => (current === item.id ? null : item.id));
+                                }}
+                              >
+                                {isEditing ? "Listo" : "Editar"}
+                              </button>
+                              <button
+                                type="button"
+                                className="text-red-300 hover:text-red-200"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  requestDeleteAuthorization([item.id]);
+                                }}
+                              >
+                                Borrar
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-slate-500">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
           {hasMoreItems && (
             <div className="flex flex-col items-center gap-3 pt-4">
