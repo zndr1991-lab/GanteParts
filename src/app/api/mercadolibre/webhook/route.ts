@@ -26,16 +26,28 @@ function verifySignature(params: { signatureHeader: string; secret: string; rawB
   if (signatureHeader === secret) return true;
 
   const match = signatureHeader.match(/ts=([^,]+),v1=([a-f0-9]+)/i);
-  if (!match) return false;
-  const [, ts, signature] = match;
+  const matchAny = signatureHeader.match(/ts=([^,]+),v1=([^,]+)/i);
+  if (!matchAny) return false;
+  const [, ts, signature] = matchAny;
   const payload = `${ts}.${rawBody}`;
-  const digest = createHmac("sha256", secret).update(payload).digest("hex");
-  if (digest.length !== signature.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(signature, "utf8"));
-  } catch {
-    return false;
+  const digestHex = createHmac("sha256", secret).update(payload).digest("hex");
+  const digestBase64 = createHmac("sha256", secret).update(payload).digest("base64");
+  const normalizedSignature = signature.trim();
+  if (digestHex.length === normalizedSignature.length) {
+    try {
+      return timingSafeEqual(Buffer.from(digestHex, "utf8"), Buffer.from(normalizedSignature, "utf8"));
+    } catch {
+      return false;
+    }
   }
+  if (digestBase64.length === normalizedSignature.length) {
+    try {
+      return timingSafeEqual(Buffer.from(digestBase64, "utf8"), Buffer.from(normalizedSignature, "utf8"));
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function verifySignatureFallback(params: { signatureHeader: string; secret: string; rawBody: string }) {
@@ -43,14 +55,23 @@ function verifySignatureFallback(params: { signatureHeader: string; secret: stri
   if (!secret) return true;
   if (!signatureHeader) return false;
   const hex = signatureHeader.replace(/^v1=|^sha256=/i, "").trim();
-  if (!/^[a-f0-9]+$/i.test(hex)) return false;
-  const digest = createHmac("sha256", secret).update(rawBody).digest("hex");
-  if (digest.length !== hex.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(hex, "utf8"));
-  } catch {
-    return false;
+  const digestHex = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const digestBase64 = createHmac("sha256", secret).update(rawBody).digest("base64");
+  if (/^[a-f0-9]+$/i.test(hex) && digestHex.length === hex.length) {
+    try {
+      return timingSafeEqual(Buffer.from(digestHex, "utf8"), Buffer.from(hex, "utf8"));
+    } catch {
+      return false;
+    }
   }
+  if (digestBase64.length === hex.length) {
+    try {
+      return timingSafeEqual(Buffer.from(digestBase64, "utf8"), Buffer.from(hex, "utf8"));
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function extractItemId(resource?: string | null) {
