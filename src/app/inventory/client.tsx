@@ -541,7 +541,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             localEstatusInternoRef.current.delete(item.id);
             return item;
           }
-          const nextExtra = { ...(item.extraData ?? {}), estatus_interno: local.value || undefined };
+          const nextExtra: Record<string, any> = { ...(item.extraData ?? {}), estatus_interno: local.value || undefined };
           if (local.prestadoVendidoA !== undefined) {
             nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
           }
