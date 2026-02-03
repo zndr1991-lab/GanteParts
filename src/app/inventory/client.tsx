@@ -376,6 +376,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
+  const localEstatusInternoRef = useRef(
+    new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
+  );
   const [isMobile, setIsMobile] = useState(false);
   const pageSizeRef = useRef(initialPage.pageSize);
   const [totalItems, setTotalItems] = useState(initialPage.total);
@@ -525,24 +528,43 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           throw new Error(data.error || "No se pudo obtener el inventario");
         }
         const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
+        const now = Date.now();
+        const incomingWithLocal = incoming.map((item) => {
+          const local = localEstatusInternoRef.current.get(item.id);
+          if (!local) return item;
+          if (now - local.updatedAt > 10 * 60 * 1000) {
+            localEstatusInternoRef.current.delete(item.id);
+            return item;
+          }
+          const currentInternal = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+          if (currentInternal === local.value) {
+            localEstatusInternoRef.current.delete(item.id);
+            return item;
+          }
+          const nextExtra = { ...(item.extraData ?? {}), estatus_interno: local.value || undefined };
+          if (local.prestadoVendidoA !== undefined) {
+            nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
+          }
+          return { ...item, extraData: nextExtra };
+        });
         if (typeof data.pageSize === "number" && data.pageSize > 0) {
           pageSizeRef.current = data.pageSize;
         }
-        setTotalItems(typeof data.total === "number" ? data.total : incoming.length);
+        setTotalItems(typeof data.total === "number" ? data.total : incomingWithLocal.length);
         setItems((current) => {
           if (!append) {
             if (!updatingIds.length) {
-              return incoming;
+              return incomingWithLocal;
             }
             const updatingSet = new Set(updatingIds);
             const currentMap = new Map(current.map((item) => [item.id, item]));
-            return incoming.map((item) =>
+            return incomingWithLocal.map((item) =>
               updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item
             );
           }
           const existingIds = new Set(current.map((item) => item.id));
           const merged = [...current];
-          incoming.forEach((item) => {
+          incomingWithLocal.forEach((item) => {
             if (!existingIds.has(item.id)) {
               merged.push(item);
               existingIds.add(item.id);
@@ -1303,6 +1325,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       ? overridePrestadoVendidoA ?? null
       : currentPrestadoVendidoA;
 
+    localEstatusInternoRef.current.set(id, {
+      value: normalized,
+      updatedAt: Date.now(),
+      prestadoVendidoA
+    });
+
     const prevItems = items.map((item) => ({
       ...item,
       extraData: item.extraData ? { ...item.extraData } : item.extraData
@@ -1351,6 +1379,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     } catch (err: any) {
       setItems(prevItems);
       setMessage(err.message || "No se pudo actualizar");
+      localEstatusInternoRef.current.delete(id);
     } finally {
       setUpdatingIds((prev) => prev.filter((x) => x !== id));
     }
