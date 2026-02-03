@@ -211,3 +211,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false });
   }
 }
+
+export async function GET() {
+  return NextResponse.json({ ok: true, message: "Webhook activo" });
+}
