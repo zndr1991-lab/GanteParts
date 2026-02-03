@@ -38,6 +38,21 @@ function verifySignature(params: { signatureHeader: string; secret: string; rawB
   }
 }
 
+function verifySignatureFallback(params: { signatureHeader: string; secret: string; rawBody: string }) {
+  const { signatureHeader, secret, rawBody } = params;
+  if (!secret) return true;
+  if (!signatureHeader) return false;
+  const hex = signatureHeader.replace(/^v1=|^sha256=/i, "").trim();
+  if (!/^[a-f0-9]+$/i.test(hex)) return false;
+  const digest = createHmac("sha256", secret).update(rawBody).digest("hex");
+  if (digest.length !== hex.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(digest, "utf8"), Buffer.from(hex, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 function extractItemId(resource?: string | null) {
   if (!resource) return null;
   const clean = resource.split("?")[0];
@@ -67,10 +82,14 @@ export async function POST(req: Request) {
       payload = null;
     }
   }
-  const signatureHeader = req.headers.get("x-ml-signature") || "";
+  const signatureHeader =
+    req.headers.get("x-ml-signature") ||
+    req.headers.get("x-meli-signature") ||
+    req.headers.get("x-meli-signature-v1") ||
+    "";
   const secret = process.env.ML_WEBHOOK_SECRET || "";
 
-  if (!verifySignature({ signatureHeader, secret, rawBody })) {
+  if (!verifySignature({ signatureHeader, secret, rawBody }) && !verifySignatureFallback({ signatureHeader, secret, rawBody })) {
     const resource = typeof payload?.resource === "string" ? payload.resource : "";
     const fallbackItemId = extractItemId(resource);
     const fallbackItem = fallbackItemId
